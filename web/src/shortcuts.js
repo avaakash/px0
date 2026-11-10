@@ -149,6 +149,15 @@ export function initShortcuts() {
       return;
     }
 
+    // This review surface has its own checkout. Editor shortcuts must not
+    // silently save/edit/stage the original workspace behind it.
+    if (document.body.classList.contains('in-worktree-changes')) {
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); openPalette('command'); }
+      else if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); $('#wt-filter')?.focus(); }
+      else if (mod && ['s', 'e', 'd', 'w', 'b'].includes(e.key.toLowerCase())) e.preventDefault();
+      return;
+    }
+
     if (mod && (e.key === 'j' || e.key === 'J')) {
       e.preventDefault();
       if (document.body.classList.contains('right-hidden')) showRightInspector();

@@ -16,6 +16,27 @@ The browser's file tabs are managed in `web/src/tabs.js`. Tab context-menu actio
 
 ## 2. Startup Pipeline (<1 ms Critical Path)
 
+### In-page worktree review
+
+The Changes mode reads registered worktrees through `worktree_changes.go` and
+renders them in an isolated `worktreechanges.js` surface. It does not change the
+active editor's root, metadata, tabs, or unsaved content. Each request carries
+the chosen checkout and staged/unstaged file group, validates its scope, and
+uses bounded local Git commands. Switching checkouts is an asynchronous data
+update rather than page navigation or a new workspace process. The controller
+cancels obsolete requests and ignores late responses. All known repositories
+and worktrees appear as expandable sidebar sections; hidden sections are
+restorable browser preferences. Metadata uses a shared fifteen-second cache.
+Collapsed/hidden sections never scan changes, expanded scans have concurrency
+two and a ten-second freshness window, and the active diff checks only its
+selected file. Diff payloads are limited to six recent worktrees, with paged DOM
+rendering for large lists and diffs. Explicit staging POSTs validate the selected
+checkout and group before changing its index; single-file responses merge only
+affected paths. The integrated terminal is a separate, on-demand PTY manager;
+its bounded output ring survives browser reconnects while the Go process lives.
+The browser streams only the visible selected terminal, leaving hidden shells
+running without background rendering.
+
 When `px0` is executed in a terminal (e.g., `px0 .` or `px0 main.go:42`), the initialization flow executes as follows. A file target detects its enclosing project repository (or working directory) as the workspace and is passed to the browser with its relative path and optional line number.
 
 ```mermaid

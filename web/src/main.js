@@ -33,6 +33,8 @@ import { initEditView } from './editview.js';
 import { initNewItem } from './newitem.js';
 import { initTips, startTipsAsync } from './tips.js';
 import { initReviewFlow } from './reviewflow.js';
+import { initWorktreeChanges, openWorktreeChanges } from './worktreechanges.js';
+import { initTerminal } from './terminal.js';
 
 // Initialize all subsystems
 initRenderer();
@@ -41,6 +43,8 @@ initEditView();
 initNewItem();
 initTips();
 initReviewFlow();
+initWorktreeChanges();
+initTerminal();
 initCursor();
 initHover();
 initSelectionBar();
@@ -53,6 +57,7 @@ initInspector();
 initCalls();
 initFind();
 initPalette();
+$('#btn-worktrees')?.addEventListener('click', () => openWorktreeChanges());
 initShortcuts();
 initMarkdown();
 initDiff();
@@ -105,13 +110,13 @@ initPRScope();
   document.title = S.meta.name + ' - px0';
   $('#root-name').textContent = S.meta.name;
   $('#root-name').title = S.meta.root;
-  if (S.meta.workbench) {
+  if (S.meta.workbench || S.meta.worktreeHost) {
     // Opened from the workbench (workbench.go): link back to it.
     const back = document.createElement('a');
     back.className = 'mini wb-back';
-    back.href = S.meta.workbench;
-    back.title = 'Back to the px0 workbench';
-    back.setAttribute('aria-label', 'Back to the px0 workbench');
+    back.href = S.meta.workbench || S.meta.worktreeHost;
+    back.title = S.meta.workbench ? 'Back to the px0 workbench' : 'Back to the original workspace';
+    back.setAttribute('aria-label', back.title);
     back.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>';
     $('#root-name').before(back);
   }

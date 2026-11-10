@@ -18,6 +18,8 @@ import { showVimHelp, isVimEnabled, setVimModeEnabled } from './vim.js';
 import { launchPR } from './pr.js';
 import { newThread, deleteCurrentThread } from './thread.js';
 import { copyToClipboard, copyRichToClipboard } from './ui.js';
+import { openWorktreeChanges, worktreeLabel } from './worktreechanges.js';
+import { emit } from './bus.js';
 import { getDocRaw } from './markdown.js';
 import { getSelectedRangeInfo } from './selbar.js';
 import { enterEditMode, exitEditMode, saveActiveFile } from './editview.js';
@@ -104,6 +106,8 @@ export const COMMANDS = [
   { name: withKeys('Threads: Start New Thread ({Alt+T} on a selection)'), run: () => newThread(null) },
   { name: 'Threads: Delete Current Thread', run: deleteCurrentThread },
   { name: 'Git: Open Pull Request…', run: () => openPalette('openpr', '') },
+  { name: 'Git: Switch Worktree…', run: () => openPalette('worktree', '') },
+  { name: 'Git: Worktree Changes', run: () => openWorktreeChanges() },
   { name: 'Preferences: Toggle Vim Keybindings', run: () => setVimModeEnabled(!isVimEnabled(), true) },
   { name: 'Help: Vim Keybindings Cheat Sheet', run: showVimHelp },
   { name: 'Help: Tips & Tricks (All Tips)', run: () => navigateToTips() },
@@ -118,6 +122,7 @@ export const PAL_MODES = {
   command: { tag: 'Command', hint: '' },
   theme: { tag: 'Theme', hint: 'Arrows preview a theme. Enter keeps it, Esc restores the previous one.' },
   openpr: { tag: 'Open PR', hint: 'Full pull request URL (e.g. https://github.com/owner/repo/pull/123), then Enter.' },
+  worktree: { tag: 'Worktree', hint: 'Filter by display name, branch, or path. Enter reviews its uncommitted changes in this page.' },
 };
 
 export function openPalette(mode, seed) {
@@ -144,11 +149,11 @@ export const refreshPalette = debounce(async () => {
   if (!pal) return;
   const seq = ++palSeq;
   let raw = palInput.value;
-  // theme and openpr have no prefix character: once entered (via a command),
+  // Theme, PR and worktree pickers have no prefix character: once entered,
   // they stay put regardless of what's typed, unlike file/symbol/line/command
   // which re-derive their mode from the input on every keystroke.
-  let mode = (pal.mode === 'theme' || pal.mode === 'openpr') ? pal.mode : 'file';
-  if (mode === 'theme' || mode === 'openpr') { /* no prefixes: the query is the value itself */ }
+  let mode = ['theme', 'openpr', 'worktree'].includes(pal.mode) ? pal.mode : 'file';
+  if (mode === 'theme' || mode === 'openpr' || mode === 'worktree') { /* no prefixes: the query is the value itself */ }
   else if (raw.startsWith('>')) { mode = 'command'; raw = raw.slice(1); }
   else if (raw.startsWith('@')) { mode = 'symbol'; raw = raw.slice(1); }
   else if (raw.startsWith(':')) { mode = 'line'; raw = raw.slice(1); }
@@ -177,6 +182,25 @@ export const refreshPalette = debounce(async () => {
     const lq = q.toLowerCase();
     pal.items = listThemes().filter(t => (t.name + ' ' + t.id).toLowerCase().includes(lq))
       .map(t => ({ kind: 'theme', id: t.id, label: t.name, sub: t.scheme, right: t.id === pal.restoreTheme ? 'current' : '' }));
+  } else if (mode === 'worktree') {
+    let j;
+    try { j = await api('/api/git/worktrees', { all: 1 }); }
+    catch (err) {
+      if (seq !== palSeq || !pal) return;
+      pal.items = [{ label: 'Could not list worktrees', sub: err.message, disabled: true }];
+      drawPalette();
+      return;
+    }
+    if (seq !== palSeq || !pal) return;
+    const lq = q.toLowerCase();
+    pal.items = (j.worktrees || []).filter(w => (worktreeLabel(w) + ' ' + w.branch + ' ' + w.path).toLowerCase().includes(lq))
+      .map(w => ({
+        kind: 'worktree', path: w.path,
+        label: worktreeLabel(w),
+        sub: (w.branch ? w.branch + ' · ' : '') + w.path,
+        right: w.current ? 'current' : (!w.available ? 'unavailable' : (w.locked ? 'locked' : '')),
+        disabled: !w.available,
+      }));
   } else if (mode === 'openpr') {
     pal.items = q ? [{ kind: 'openpr', target: q, label: 'Open PR: ' + esc(q), sub: 'Enter to open in a new tab', raw: true }] : [];
   } else {
@@ -199,7 +223,8 @@ export const refreshPalette = debounce(async () => {
       }, 300);
     }
   }
-  pal.sel = mode === 'theme' ? Math.max(0, pal.items.findIndex(it => it.id === currentTheme())) : 0;
+  pal.sel = mode === 'theme' ? Math.max(0, pal.items.findIndex(it => it.id === currentTheme()))
+    : mode === 'worktree' ? Math.max(0, pal.items.findIndex(it => !it.disabled)) : 0;
   drawPalette();
 }, 40);
 
@@ -227,7 +252,7 @@ export function drawPalette() {
     return;
   }
   palList.innerHTML = pal.items.map((it, i) =>
-    '<div class="pi' + (i === pal.sel ? ' sel' : '') + '" data-i="' + i + '">' +
+    '<div class="pi' + (i === pal.sel ? ' sel' : '') + (it.disabled ? ' disabled' : '') + '" aria-disabled="' + !!it.disabled + '" data-i="' + i + '">' +
     '<span class="pn">' + (it.raw ? it.label : esc(it.label)) + '</span>' +
     '<span class="pp">' + (it.raw ? it.sub : esc(it.sub || '')) + '</span>' +
     (it.right ? '<span class="pr">' + esc(it.right) + '</span>' : '') + '</div>').join('');
@@ -245,6 +270,9 @@ export function movePalette(delta) {
 export async function acceptPalette() {
   if (!pal || !pal.items.length) return;
   const it = pal.items[pal.sel];
+  if (it.disabled) return;
+  if (document.body.classList.contains('in-worktree-changes') &&
+      (['file', 'sym', 'line', 'openpr'].includes(it.kind) || (it.kind === 'cmd' && /^(File:|Go to |Threads:)/.test(it.cmd.name)))) emit('mode:request', 'code');
   if (it.kind === 'theme') pal.restoreTheme = null;
   closePalette();
   if (it.kind === 'file') {
@@ -259,6 +287,7 @@ export async function acceptPalette() {
   } else if (it.kind === 'cmd') it.cmd.run();
   else if (it.kind === 'theme') setTheme(it.id);
   else if (it.kind === 'openpr') launchPR(it.target);
+  else if (it.kind === 'worktree') openWorktreeChanges(it.path);
 }
 
 export function initPalette() {

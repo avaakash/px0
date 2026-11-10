@@ -48,6 +48,7 @@
         <span id="git-branch" class="git-branch"></span>
         <span id="git-counts" class="git-counts"></span>
         <span class="grow"></span>
+        <button id="btn-worktrees" class="mini" type="button" title="Switch worktree" aria-label="Switch worktree"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button>
         <button id="git-panel-collapse" class="pr-comments-collapse" title="Collapse">&#9662;</button>
       </div>
       <div id="git-panel-body" class="git-panel-body">
@@ -146,8 +147,10 @@
           <span>Review</span>
           <span id="review-badge-status" class="review-status-dot" hidden></span>
         </button>
+        <button id="btn-mode-worktrees" title="Review changes across worktrees"><span>Changes</span></button>
       </div>
 
+      <button id="btn-terminal" type="button" class="terminal-launch" title="Open terminal for the selected worktree">Terminal</button>
       <div class="main-top-bar-spacer"></div>
 
       <!-- View-mode switches: Diff, Markdown preview, Edit controls, Sidebar toggle -->
@@ -204,6 +207,51 @@
         <button id="btn-open-right" class="open-right" title="Open sidebar ({Mod+J})" aria-label="Open right sidebar"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
       </div>
     </header>
+
+    <section id="worktree-changes-view" class="wt-view" hidden aria-label="Worktree Changes">
+      <aside class="wt-sidebar">
+        <header class="wt-side-head"><h2>Worktree Changes</h2><button id="wt-refresh" type="button" class="mini" title="Refresh worktrees and changes" aria-label="Refresh worktree changes">↻</button></header>
+        <input id="wt-filter" class="wt-filter" type="search" placeholder="Filter changed files…" aria-label="Filter changed files" autocomplete="off">
+        <p id="wt-status" class="wt-status" role="status" aria-live="polite" hidden></p>
+        <nav id="wt-files" class="wt-files" aria-label="Changed files in selected worktree"></nav>
+        <button id="wt-hidden-toggle" class="wt-hidden-toggle" type="button" aria-expanded="false" hidden>Hidden worktrees</button>
+        <div id="wt-hidden-list" class="wt-hidden-list" hidden></div>
+      </aside>
+      <div class="wt-main">
+        <header class="wt-diff-head"><div><strong id="wt-file-path">Worktree Changes</strong><small id="wt-file-group"></small></div><select id="wt-layout" aria-label="Worktree diff layout"><option value="split">Side by side</option><option value="unified">Unified</option></select></header>
+        <div id="wt-diff" class="wt-diff" tabindex="0" aria-label="Selected worktree file diff"></div>
+      </div>
+    </section>
+
+    <dialog id="wt-rename-dialog" class="wt-rename-dialog" aria-labelledby="wt-rename-title" aria-describedby="wt-rename-help">
+      <form id="wt-rename-form">
+        <h2 id="wt-rename-title">Rename worktree</h2>
+        <p id="wt-rename-help">Choose a display name for px0.</p>
+        <label for="wt-rename-input">Display name</label>
+        <input id="wt-rename-input" type="text" maxlength="120" autocomplete="off" spellcheck="false" aria-describedby="wt-rename-original">
+        <p id="wt-rename-original" class="wt-rename-original"></p>
+        <div class="wt-rename-actions">
+          <button id="wt-rename-reset" type="button">Use branch name</button>
+          <button id="wt-rename-cancel" type="button">Cancel</button>
+          <button type="submit" class="wt-rename-save">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="terminal-rename-dialog" class="wt-rename-dialog" aria-labelledby="terminal-rename-title">
+      <form id="terminal-rename-form">
+        <h2 id="terminal-rename-title">Rename terminal</h2>
+        <p>Choose a name for this terminal.</p>
+        <label for="terminal-rename-input">Terminal name</label>
+        <input id="terminal-rename-input" type="text" maxlength="120" autocomplete="off" spellcheck="false">
+        <p id="terminal-rename-directory" class="wt-rename-original"></p>
+        <div class="wt-rename-actions">
+          <button id="terminal-rename-reset" type="button">Use default name</button>
+          <button id="terminal-rename-cancel" type="button">Cancel</button>
+          <button id="terminal-rename-save" type="submit" class="wt-rename-save">Save</button>
+        </div>
+      </form>
+    </dialog>
 
     <!-- File Tabs (Level 2: directly below top menu bar) -->
     <div id="tabs"></div>
@@ -535,6 +583,20 @@
         </div>
       </div>
     </div>
+
+    <section id="terminal-panel" class="terminal-panel" hidden aria-label="Integrated terminal">
+      <div id="terminal-resize" class="terminal-resize" role="separator" tabindex="0" aria-label="Resize terminal panel" aria-orientation="horizontal" aria-valuemin="140" aria-valuemax="600" aria-valuenow="260" title="Drag to resize terminal; double-click to reset"></div>
+      <header class="terminal-toolbar">
+        <strong class="terminal-panel-title">Terminal</strong>
+        <span id="terminal-path"></span>
+        <button id="terminal-open" type="button" title="New terminal in the active worktree" aria-label="New terminal">+</button>
+        <button id="terminal-hide" type="button" title="Hide panel; keeps shells running" aria-label="Hide terminal panel">×</button>
+      </header>
+      <div class="terminal-body">
+        <div id="terminal-instances" class="terminal-instances"></div>
+        <div id="terminal-sessions" class="terminal-sessions" role="tablist" aria-label="Terminal sessions" aria-orientation="vertical" hidden></div>
+      </div>
+    </section>
 
     <!-- Bottom Status Bar -->
     <footer id="status">

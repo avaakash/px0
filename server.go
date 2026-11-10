@@ -70,10 +70,10 @@ type Server struct {
 	lsp       *lspManager
 	tel       *telemetry.Service // nil in tests; Track is nil-safe
 	agent     *agentManager      // nil unless main wires editing for this session
-	threads   *threadManager    // nil unless editing is wired: threads run on the same harness
-	pr        *prSession        // nil unless main launched this process as `px0 pr ...`
-	diffBase  string            // ref /api/diff and /api/gutter diff against; "HEAD" unless in PR mode
-	prHeadSHA string            // PR mode only: the checked-out PR head commit. Frozen boundary between
+	threads   *threadManager     // nil unless editing is wired: threads run on the same harness
+	pr        *prSession         // nil unless main launched this process as `px0 pr ...`
+	diffBase  string             // ref /api/diff and /api/gutter diff against; "HEAD" unless in PR mode
+	prHeadSHA string             // PR mode only: the checked-out PR head commit. Frozen boundary between
 	// the PR's own diff (diffBase..prHeadSHA) and the reviewer's local edits
 	// since checkout (prHeadSHA..working tree); refreshed on Pull.
 	gitWatcher *GitWatcher
@@ -81,7 +81,15 @@ type Server struct {
 	basePath   string
 	session    *sessionManager
 
-	workbenchURL string // the workbench's base path, when this px0 is one of its workspaces
+	workbenchURL      string // the workbench's base path, when this px0 is one of its workspaces
+	worktreeHostURL   string // original standalone viewer, for worktree children (not a full workbench)
+	worktreeMu        sync.Mutex
+	worktreeWB        *workbench
+	worktreeArgs      []string
+	worktreeClosed    bool
+	worktreeInventory worktreeInventoryCache
+	worktreeWriteMu   sync.Mutex
+	terminals         terminalManager
 
 	reviewFlow *ReviewWorkflowManager
 
@@ -97,6 +105,7 @@ type Server struct {
 // http.Server.RegisterOnShutdown: Shutdown does not cancel request contexts,
 // so streams would otherwise hold it up until its deadline.
 func (s *Server) EndStreams() {
+	s.CloseTerminals()
 	s.endStreams.Do(func() {
 		if s.streamsDone != nil {
 			close(s.streamsDone)
@@ -162,6 +171,16 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/stream"), s.handleEventStream)
 	s.mux.HandleFunc(s.routePath("/api/git/stream"), s.handleEventStream)
 	s.mux.HandleFunc(s.routePath("/api/git/refresh"), s.handleGitRefresh)
+	s.mux.HandleFunc(s.routePath("/api/git/worktrees"), s.handleWorktrees)
+	s.mux.HandleFunc(s.routePath("/api/git/worktrees/open"), s.handleOpenWorktree)
+	s.mux.HandleFunc(s.routePath("/api/git/worktrees/changes"), s.handleWorktreeChanges)
+	s.mux.HandleFunc(s.routePath("/api/git/worktrees/diff"), s.handleWorktreeDiff)
+	s.mux.HandleFunc(s.routePath("/api/git/worktrees/stage"), s.handleWorktreeStage)
+	s.mux.HandleFunc(s.routePath("/api/git/worktrees/unstage"), s.handleWorktreeStage)
+	for _, action := range []string{"open", "list", "stream", "input", "resize", "close", "rename"} {
+		s.mux.HandleFunc(s.routePath("/api/terminal/"+action), s.handleTerminal)
+	}
+	s.mux.HandleFunc(s.routePath("/w/"), s.handleWorktreeWorkspace)
 	s.mux.HandleFunc(s.routePath("/api/git/stage"), s.handleGitStage)
 	s.mux.HandleFunc(s.routePath("/api/git/unstage"), s.handleGitUnstage)
 	s.mux.HandleFunc(s.routePath("/api/git/hunk"), s.handleGitHunk)
@@ -285,7 +304,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	streamPath := s.routePath("/api/stream")
 	gitStreamPath := s.routePath("/api/git/stream")
 	metricsPath := s.routePath("/api/metrics")
-	isSSE := r.URL.Path == streamPath || r.URL.Path == gitStreamPath || r.Header.Get("Accept") == "text/event-stream"
+	// Worktree children already apply their own compression. Wrapping a
+	// proxied gzip response again leaves the browser with compressed bytes.
+	isWorktreeProxy := strings.HasPrefix(r.URL.Path, s.routePath("/w/"))
+	isSSE := r.URL.Path == streamPath || r.URL.Path == gitStreamPath || r.URL.Path == s.routePath("/api/terminal/stream") || r.Header.Get("Accept") == "text/event-stream"
 	if r.URL.Path != metricsPath && !isSSE {
 		s.lastReq.Store(time.Now().UnixNano())
 	}
@@ -322,7 +344,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var out http.ResponseWriter = rec
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
-	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && !isSSE {
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") && !isSSE && !isWorktreeProxy {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
 		gz := gzipPool.Get().(*gzip.Writer)
@@ -935,25 +957,26 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	gitCount, gitFiles := s.ix.GitChanges()
 	meta := map[string]any{
-		"root":        s.ix.Root(),
-		"name":        filepath.Base(s.ix.Root()),
-		"files":       n,
-		"indexMs":     ms,
-		"builtAt":     at,
-		"ready":       s.ix.Ready(),
-		"git":         inGit,
-		"gitChanges":  gitCount,
-		"gitFiles":    gitFiles,
-		"forge":       s.forgeMeta(),
-		"lspServers":  s.lsp.Available(),
-		"metrics":     getProcessMetrics(s.lsp),
-		"version":     version,
-		"basePath":    s.BasePath(),
-		"workbench":   s.workbenchURL,
-		"agent":       s.agent.Name(),
-		"agentModel":  s.agent.Model(),
-		"agentPinned": s.agent.Pinned(),
-		"agents":      []agentHarness{},
+		"root":         s.ix.Root(),
+		"name":         filepath.Base(s.ix.Root()),
+		"files":        n,
+		"indexMs":      ms,
+		"builtAt":      at,
+		"ready":        s.ix.Ready(),
+		"git":          inGit,
+		"gitChanges":   gitCount,
+		"gitFiles":     gitFiles,
+		"forge":        s.forgeMeta(),
+		"lspServers":   s.lsp.Available(),
+		"metrics":      getProcessMetrics(s.lsp),
+		"version":      version,
+		"basePath":     s.BasePath(),
+		"workbench":    s.workbenchURL,
+		"worktreeHost": s.worktreeHostURL,
+		"agent":        s.agent.Name(),
+		"agentModel":   s.agent.Model(),
+		"agentPinned":  s.agent.Pinned(),
+		"agents":       []agentHarness{},
 	}
 	if s.pr != nil {
 		meta["pr"] = s.pr.metaMap(s.ix.PRFiles())

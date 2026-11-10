@@ -14,6 +14,78 @@ Running `px0` with no arguments opens the **workbench**: one page for opening an
 
 Each workspace opens at its own address, `/w/<id>/`, on the workbench's port. The address is stable, so a bookmarked or reloaded review simply reopens. The ▦ button in the explorer header leads back to the workbench.
 
+## Reviewing worktree changes
+
+Click **Changes** in the top bar, or the **Switch worktree** button in the Git
+panel. All registered worktrees appear as expandable sections grouped by
+repository, including ignored `.claude/worktrees/<name>` directories and
+checkouts outside the main directory. Keep several expanded at once. Repositories
+already opened in px0 also appear, even when the current folder is not a Git
+repository. Use the × beside a worktree to **hide it from view**; this never
+deletes files or branches. **Hidden worktrees** lets you restore one or all.
+Click the pencil beside a worktree to give it a **display name**. Save a custom
+label, or choose **Use branch name** to reset it; an empty name also resets it.
+The folder and Git branch keep their original names. Labels appear in the
+sidebar, selected diff header, hidden list, and worktree command palette.
+Display names, hidden sections, and expanded sections are remembered in this
+browser for each checkout path. **Git: Switch Worktree…** in the command palette
+can filter by display name, branch, or path and open that checkout's Changes view.
+
+Only uncommitted changes are shown: **Staged Changes** compares HEAD to the
+index; **Changes** compares the index to the working tree and includes new
+files. A partially staged file appears in both groups with the corresponding
+diff. Conflicts have a **Merge Changes** group. Select a file to review a split
+or unified diff, and use the file filter to narrow the list.
+
+Switching worktrees updates the view in place. The page, ordinary editor tabs,
+and unsaved text remain alive. Each checkout remembers its last selected file
+and scroll position during the browser session, with diff content cached for
+six recent checkouts. Headers appear before change scans finish. Collapsed and
+hidden worktrees do no change scanning; expanded lists refresh every ten seconds
+with at most two scans in flight. The selected diff refreshes every two seconds
+by checking only that file, while the page is visible. **Refresh** also discovers
+newly created worktrees. Use **+** to stage a file and **−** to unstage it.
+Each change group has **Stage all** or **Unstage all**, scoped to that group's
+checkout. Clear the file filter to enable group actions. A partially staged file appears in both groups; staging adds its
+current working contents, while unstaging preserves the file on disk. Actions
+refresh the affected paths and never act on the original editor's checkout.
+Click **Code** to return to your editor. The view works in standalone px0 and
+in workbench child workspaces, without starting a child process for each selected
+worktree. Missing, prunable, and bare checkouts are unavailable. Files larger
+than the 2 MiB diff response limit show a clear error; large lists and diffs are
+expanded on demand.
+
+## Integrated terminal
+
+Click **Terminal** in the top bar, or **›_** beside a worktree, to open a local
+interactive shell in that checkout. The bottom panel shows the session's directory;
+use the session list on the right to switch between existing shells. The list
+stays visible even with one terminal so its controls remain accessible. Drag the top edge to resize the
+panel; its height is remembered in this browser. The worktree sidebar stays full
+height, with the terminal docked beneath the editor. Terminal colors follow the
+active theme with a slightly greyer background. Opening the same
+checkout reveals an existing shell; **+** creates another independent shell in
+the active terminal’s worktree. Sessions get numbered default names. Use the
+pencil beside a terminal row, or press F2 in the session list,
+to rename that session. Names belong to individual terminals and survive page reloads
+while px0 runs. **Use default name** resets a label. Switching worktrees does not change a running shell's
+directory. The worktree’s **›_** button reveals a terminal in that checkout. Floating tips
+are hidden while the terminal panel is open so its toolbar stays accessible.
+
+**Hide terminal panel** keeps shells alive. The trash icon beside a terminal
+ends only that shell; deleting an inactive row keeps the current session selected.
+Ctrl-C interrupts a running command while keeping the shell open. There is no
+separate Interrupt toolbar button. Arrow/history keys work, and the terminal resizes to the
+panel. Output and session state survive browser reloads while the same px0 process
+runs. Terminal history in the UI is bounded to 2,000 lines; the backend retains
+the newest 256 KiB of output for reconnecting. Shells start only on request, with
+at most 16 active sessions. Closing px0 stops its managed shells.
+
+No tmux is required. Run tmux inside the terminal yourself if you want its own
+session management across px0 restarts; px0 does not create or manage tmux sessions.
+Integrated terminals currently support macOS and Unix. They are available only
+through local, same-origin requests; existing sessions require a random capability.
+
 ## Managing the list
 
 Hover a row for its actions:

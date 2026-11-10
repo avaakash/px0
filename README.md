@@ -19,6 +19,9 @@ See full performance benchmarks and comparisons at [px0.ai/benchmarks](https://p
 
 ## Features
 
+- **Integrated Terminal:** Open a local shell in any worktree, with multiple named sessions, live output, Ctrl-C, resizing, and sessions retained across view switches and browser reloads while px0 runs. No tmux installation required.
+- **Worktree Changes:** Review existing checkouts in the **Changes** view, including ignored `.claude/worktrees/` folders. Expand several worktrees together to see staged, unstaged, and untracked changes. Give checkouts custom display names, or hide and restore them; switching files stays in place without disturbing editor tabs. Stage or unstage individual files or whole change groups in the selected checkout.
+
 - Review workbench: Run `px0` with no arguments to open a unified launchpad on a single port, browse projects, and keep unsubmitted review drafts across sessions.
 - Pull request reviews & Git control: Review GitHub, GitLab, Gitea/Forgejo, and Bitbucket Cloud PRs directly (`px0 <pr-url>`), inspect scoped merge-base diffs, draft inline comments, 1-click agentic rebase for conflict resolution, squash and merge, browse commit diffs, and stage, commit, or push from the browser.
 - Multi-turn agent threads: Anchor conversations to code ranges (`Alt+T`), stream live tool execution over Server-Sent Events, queue batch inline edits across files (`Alt+E`), and dispatch to Claude Code, Cursor Agent, Antigravity, OpenCode, Codex, Aider, or Goose.

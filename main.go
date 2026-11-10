@@ -57,6 +57,7 @@ func main() {
 		_            = flag.Bool("yes", false, "answer yes to prompts (alias for -y)")
 		basePathFlag = flag.String("base-path", "", "base URL path prefix to serve endpoints and assets from (e.g. /rev-123/)")
 		wbChild      = flag.Bool("workbench-child", false, "internal: run as a workspace of the px0 workbench")
+		wtHost       = flag.Bool("worktree-host", false, "internal: workspace belongs to a standalone worktree viewer")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "px0 %s - a code navigator\n\nusage:\n  px0 [flags]                      open the workbench\n  px0 [flags] <file or directory>\n  px0 [flags] <pr-url>\n\nflags:\n", version)
@@ -92,19 +93,19 @@ func main() {
 
 	// Without a target, px0 opens the workbench: a launcher for directories
 	// and pull requests that runs each one as a child px0 (workbench.go).
+	var childArgs []string
+	for _, f := range []struct {
+		on   bool
+		flag string
+	}{{*noLSP, "-no-lsp"}, {*noGit, "-no-git"}, {*noAgent, "-no-agent"}, {*noTelemetry, "-no-telemetry"}} {
+		if f.on {
+			childArgs = append(childArgs, f.flag)
+		}
+	}
+	if *agentCmd != "" {
+		childArgs = append(childArgs, "-agent", *agentCmd)
+	}
 	if flag.NArg() == 0 && !*wbChild {
-		var childArgs []string
-		for _, f := range []struct {
-			on   bool
-			flag string
-		}{{*noLSP, "-no-lsp"}, {*noGit, "-no-git"}, {*noAgent, "-no-agent"}, {*noTelemetry, "-no-telemetry"}} {
-			if f.on {
-				childArgs = append(childArgs, f.flag)
-			}
-		}
-		if *agentCmd != "" {
-			childArgs = append(childArgs, "-agent", *agentCmd)
-		}
 		runWorkbench(*host, *port, *basePathFlag, !*noOpen, !*noUpdate, childArgs)
 		return
 	}
@@ -194,8 +195,13 @@ func main() {
 
 	pxSrv := NewServer(ix, lsp, configuredBasePath)
 	pxSrv.tel = tel
+	pxSrv.worktreeArgs = childArgs
 	if *wbChild {
-		pxSrv.workbenchURL = workbenchBaseOf(configuredBasePath)
+		if *wtHost {
+			pxSrv.worktreeHostURL = workbenchBaseOf(configuredBasePath)
+		} else {
+			pxSrv.workbenchURL = workbenchBaseOf(configuredBasePath)
+		}
 	} else if pr != nil {
 		it := wbPRItem(prTarget)
 		it.Title = pr.meta.Title
@@ -342,6 +348,8 @@ func main() {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
+		pxSrv.CloseTerminals()
+		pxSrv.CloseWorktrees()
 		_ = srv.Shutdown(ctx)
 		close(shutDown)
 	}()
@@ -355,6 +363,8 @@ func main() {
 	lsp.Close()
 	agent.Close()
 	pxSrv.CloseThreads()
+	pxSrv.CloseTerminals()
+	pxSrv.CloseWorktrees()
 	pr.Close()
 
 	if interrupted {

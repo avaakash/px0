@@ -7,6 +7,20 @@ export const TIPS_STORAGE_KEY_INDEX = 'px0.tips.lastIndex';
 
 export const DEFAULT_TIPS = [
   {
+    id: "worktree-terminal-stage",
+    title: "Terminal and Staging per Worktree",
+    category: "Git",
+    tag: "Worktrees",
+    content: "Use **+ / −** beside a changed file to stage or unstage it in that worktree. Open **›_** for a local shell; use **+** for another shell, rename or close it using the icons beside its row, and switch sessions in the right-hand list. Drag the panel’s top edge to resize it. Hiding the panel or switching views keeps shells running while px0 stays open."
+  },
+  {
+    id: "switch-worktree",
+    title: "Review Worktrees Without Reloading",
+    category: "Git",
+    tag: "Worktrees",
+    content: "Open **Changes** to expand several worktrees and review their staged, unstaged, and new files together. Use the pencil to set a display name, hide unwanted checkouts with ×, and restore them under **Hidden worktrees**; switching files keeps the page and editor tabs alive."
+  },
+  {
     id: "file-navigation",
     title: "Quick File Navigation",
     category: "Navigation",

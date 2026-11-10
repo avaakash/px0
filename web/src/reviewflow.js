@@ -5,6 +5,7 @@ import { showToast } from './ui.js';
 import { layout } from './renderer.js';
 import { thrMd } from './thread.js';
 import { onStream, setStreamTopic, watchThread } from './stream.js';
+import { on, emit } from './bus.js';
 
 let currentMode = 'code'; // 'code' | 'review'
 let currentLayout = (typeof localStorage !== 'undefined' && localStorage.getItem('px0-review-layout')) || 'vertical';
@@ -121,6 +122,7 @@ export function setLayout(l) {
 }
 
 export function setMode(mode) {
+  if (!['code', 'review', 'worktrees'].includes(mode)) return;
   if (mode === currentMode) return;
   currentMode = mode;
 
@@ -129,6 +131,9 @@ export function setMode(mode) {
   const reviewView = $('#review-view');
   const editor = $('#editor');
   const returnPill = $('#review-return-pill');
+  document.body.classList.toggle('in-worktree-changes', mode === 'worktrees');
+  $('#btn-mode-worktrees')?.classList.toggle('active', mode === 'worktrees');
+  if ($('#worktree-changes-view')) $('#worktree-changes-view').hidden = mode !== 'worktrees';
 
   if (mode === 'review') {
     document.body.classList.add('in-review-mode');
@@ -145,17 +150,18 @@ export function setMode(mode) {
   } else {
     document.body.classList.remove('in-review-mode');
     if (btnReview) btnReview.classList.remove('active');
-    if (btnCode) btnCode.classList.add('active');
+    if (btnCode) btnCode.classList.toggle('active', mode === 'code');
     if (reviewView) reviewView.hidden = true;
-    if (editor) editor.hidden = false;
+    if (editor) editor.hidden = mode !== 'code';
     disconnectWorkflowStream();
     layout();
-    if (lastJumpContext && returnPill) {
+    if (mode === 'code' && lastJumpContext && returnPill) {
       returnPill.hidden = false;
       const lbl = $('#review-return-label');
       if (lbl) lbl.textContent = `Jumped from: ${lastJumpContext.stageTitle || 'Review'}`;
     }
   }
+  emit('mode:changed', mode);
 }
 
 export function disconnectWorkflowStream() {
@@ -174,6 +180,7 @@ function releaseStageThread() {
 }
 
 export function initReviewFlow() {
+  on('mode:request', setMode);
   wireModeControls();
   wireLayoutControls();
   wirePipelineActions();
@@ -190,6 +197,7 @@ function wireModeControls() {
   const btnReview = $('#btn-mode-review');
   if (btnCode) btnCode.onclick = () => setMode('code');
   if (btnReview) btnReview.onclick = () => setMode('review');
+  if ($('#btn-mode-worktrees')) $('#btn-mode-worktrees').onclick = () => setMode('worktrees');
 
   const returnBtn = $('#btn-return-to-review');
   if (returnBtn) {

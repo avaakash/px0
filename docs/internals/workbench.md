@@ -17,6 +17,62 @@ flowchart LR
 
 ## Children
 
+### Existing worktree navigation
+
+The default UI now reviews worktrees in place. `GET /api/git/worktrees/changes`
+and `GET /api/git/worktrees/diff` accept a registered `worktree` path, and the
+diff endpoint additionally requires a currently changed `path` and `group`
+(and `from` for a rename). Diff validation runs path-scoped status, rather than
+rescanning the entire checkout for every file selection.
+`worktree_changes.go` reads porcelain-v2 status with NUL-delimited paths,
+distinguishes index and working-tree changes, disables external diff drivers,
+and limits Git processes to ten seconds and 2 MiB output. File paths and their
+nearest existing ancestors are confined to the selected checkout. These reads
+do not replace `Server.ix`, change branches, write Git state, or launch children.
+
+`worktreechanges.js` owns the Changes surface. Its independent controller
+aborts obsolete reads, rejects stale responses, and keeps a bounded cache of
+selected files/diffs/scroll positions. The editor DOM is hidden rather than
+rebooted; its tabs, unsaved edits, and streams retain their original workspace.
+Read-only diff rows have no editor line targets. Each checkout has an independent
+expandable section, so several change lists can stay visible. Hidden/expanded
+preferences, display-name aliases keyed by checkout path, and the last inventory
+are stored in browser localStorage; hiding
+never removes Git worktrees or files. Renaming only updates that preference;
+it does not move directories, rename branches, or issue Git requests. Labels
+are rendered as escaped text and shared with the command palette. Only expanded,
+visible sections refresh
+status (ten-second cache, maximum two concurrent scans). Only the active diff
+refreshes every two seconds. Rendering is paged for both files and diff rows.
+
+The earlier full-workspace opening API remains available for existing workspace
+URLs; the Changes list and palette no longer navigate to those URLs.
+
+`worktrees.go` exposes `GET /api/git/worktrees` and same-origin
+`POST /api/git/worktrees/open`. Discovery runs `git worktree list --porcelain -z`
+with terminal prompts disabled; NUL-delimited fields preserve whitespace and
+quoted filenames. `?all=1` includes the current repository and known directories
+from the existing workbench recent list. Git common-directory identity deduplicates
+linked checkouts. Inventory builds have a three-second budget and a shared
+fifteen-second cache; concurrent callers share one build. `?refresh=1` bypasses
+the cache. This works from a non-Git folder without recursively scanning home
+or unignoring the file index. The open endpoint accepts only a currently
+registered, available checkout of the viewer's repository.
+
+Workbench children record the selected directory in the shared store and return
+its existing `/w/<id>/` URL. Standalone viewers lazily reuse `workbench` for
+child launch/proxy only, exposing `/w/<id>/` exclusively for the repository's
+registered worktrees. The unrestricted workbench browse/open APIs are not
+exposed by a standalone viewer. Worktree children use the internal
+`-worktree-host` flag and `meta.worktreeHost` to return to their original viewer,
+keeping `meta.workbench` reserved for a full workbench. Returning to the original
+checkout redirects to its existing viewer instead of starting a duplicate.
+The normal child flags are inherited, and `CloseWorktrees` stops these children
+when the standalone host shuts down. Idle children use the usual workbench
+reaping policy.
+
+### Child process protocol
+
 `workbench.start` runs:
 
 ```
@@ -68,3 +124,45 @@ An item added by `/api/wb/open` that fails before its child is ready is removed 
 ## Security
 
 `/api/wb/browse` and `/api/wb/complete` list folders anywhere on disk, and `/api/wb/open` can start a workspace on any of them. Requests that change anything go through `localPost`: POST only, with a `Host` that is an IP address or localhost, and an `Origin` that matches it. GET requests for state and folder listings, and requests to start a workspace, go through `trustedGet`, which applies the same `Host` check against DNS rebinding. Children bind only to 127.0.0.1 and can be reached only through the proxy. When bound to a non-loopback address, the workbench prints a warning that anyone who can reach it can browse the machine.
+
+### Worktree writes and terminals
+
+`worktree_stage.go` accepts same-origin POST requests with an explicit registered
+checkout, group, and file (or all=true). It validates literal paths against fresh
+status, serializes index writes, handles rename sources and unborn HEAD, and
+refreshes only affected paths for single-file actions. The frontend cancels stale
+reads and merges scoped updates; other checkouts' state remains independent.
+
+`terminal.go` lazily creates PTY shells, at most 16 across checkouts. Opening a
+checkout reuses a live session, while POST open with new=true always creates
+a distinct shell. Per-checkout counters label duplicates and a global creation
+sequence keeps the restored list ordered. An authenticated rename action stores
+a 120-character optional name on the session; empty names restore the default.
+`creack/pty` provides Unix terminal allocation/resizing; Windows returns a clear
+unsupported response. All terminal APIs require loopback + same-origin POST, and
+session I/O requires an unguessable capability in the JSON body. Output uses a
+bounded 256 KiB ring and authenticated POST NDJSON stream with write deadlines.
+Disconnecting a browser leaves the shell running; reconnecting replays retained
+output. Shutdown and explicit close hang up PTYs and reap shells. No command
+transcripts are saved by px0; the user's shell retains its usual history policy.
+
+`terminal.js` loads pinned embedded xterm assets on demand, bounds scrollback to
+2,000 lines, awaits render writes, serializes input, fits the panel, and isolates
+terminal keystrokes from editor shortcuts. There is no mandatory tmux process or
+runtime dependency. Authentication tokens are never put in request URLs.
+
+The terminal panel docks inside `.wt-main` in Changes mode and returns to the
+editor column in Code/Review mode. Moving its existing DOM preserves xterm buffers
+and shell identity. A vertical tab list replaces the session selector, with arrow
+key navigation. A pointer/keyboard separator resizes the panel and saves its height
+in localStorage, clamping on window or mode changes to leave space for the editor.
+`terminal-layout.js` derives xterm colors from the active CSS palette, applying a
+12-percent neutral-grey blend to the editor background. Theme changes update
+existing terminals without recreating their shells or buffers.
+
+Terminal rename and close controls are siblings of each session tab, with explicit
+session IDs. Closing an inactive row preserves the active terminal and stream;
+closing the last row hides the panel. The session list remains visible for a
+single terminal. The toolbar contains only new/hide controls; Ctrl-C forwards
+interrupts directly. Worktree status text is reserved for errors and empty-state
+explanations, with the routine worktree count/expand hint omitted.

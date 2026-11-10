@@ -8,4 +8,7 @@ require (
 	github.com/yuin/goldmark v1.8.6
 )
 
-require github.com/dlclark/regexp2/v2 v2.2.1 // indirect
+require (
+	github.com/creack/pty v1.1.24
+	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
+)
