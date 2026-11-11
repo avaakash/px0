@@ -564,14 +564,21 @@ func TestAgentCancelJob(t *testing.T) {
 		t.Fatalf("cancelled = false, want true")
 	}
 
-	// Job should be stopped
-	time.Sleep(100 * time.Millisecond)
-	code, job := get(t, s, fmt.Sprintf("/api/agent/job?id=%d", id))
-	if code != http.StatusOK {
-		t.Fatalf("job = %d, want 200", code)
-	}
-	if running, _ := job["running"].(bool); running {
-		t.Fatalf("job still running after cancel")
+	// Cancellation is asynchronous: wait for the observable job state rather
+	// than assuming process shutdown and output draining finish within 100 ms.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		code, job := get(t, s, fmt.Sprintf("/api/agent/job?id=%d", id))
+		if code != http.StatusOK {
+			t.Fatalf("job = %d, want 200", code)
+		}
+		if running, _ := job["running"].(bool); !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("job still running after cancel")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -891,8 +898,6 @@ func TestCommitMessagePrompt(t *testing.T) {
 		t.Errorf("prompt contains file beyond 100:\n%s", p2)
 	}
 }
-
-
 
 func TestParseClaudeEvent(t *testing.T) {
 	evs := parseClaudeEvent(`{"type":"assistant","session_id":"s1","message":{"content":[{"type":"text","text":"Looking."},{"type":"tool_use","name":"Edit","input":{"file_path":"a.go"}}]}}`)

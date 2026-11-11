@@ -20,7 +20,7 @@ let hasError = false;
 for (const file of files) {
   const filePath = path.join(srcDir, file);
   try {
-    execFileSync('node', ['--check', filePath], { stdio: 'pipe' });
+    execFileSync(process.execPath, ['--check', filePath], { stdio: 'pipe' });
   } catch (err) {
     console.error(`[check-web] Syntax error in ${file}:`, err.stderr?.toString() || err.message);
     hasError = true;
@@ -42,8 +42,13 @@ for (const file of files) {
 try {
   execFileSync('bun', ['test', 'web/src/'], { cwd: rootDir, stdio: 'inherit' });
 } catch (err) {
-  // If bun test fails, propagate error
-  if (err.status !== 0) {
+  if (err.code === 'ENOENT') {
+    // The bundler supports a Node-only checkout; validation must do so too.
+    try {
+      const tests = files.filter(file => file.endsWith('.test.js')).map(file => path.join(srcDir, file));
+      execFileSync(process.execPath, ['--test', ...tests], { cwd: rootDir, stdio: 'inherit' });
+    } catch { hasError = true; }
+  } else {
     hasError = true;
   }
 }
@@ -52,7 +57,7 @@ for (const bundle of ['web/app.js', 'web/workbench.js']) {
   const bundlePath = path.join(rootDir, bundle);
   if (fs.existsSync(bundlePath)) {
     try {
-      execFileSync('node', ['--check', bundlePath], { stdio: 'pipe' });
+      execFileSync(process.execPath, ['--check', bundlePath], { stdio: 'pipe' });
     } catch (err) {
       console.error(`[check-web] Syntax error in ${bundle}:`, err.stderr?.toString() || err.message);
       hasError = true;

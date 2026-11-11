@@ -13,7 +13,8 @@ function createElement(id) {
       classes: new Set(),
       add(c) { this.classes.add(c); },
       remove(c) { this.classes.delete(c); },
-      contains(c) { return this.classes.has(c); }
+      contains(c) { return this.classes.has(c); },
+      toggle(c, force) { const add = force === undefined ? !this.classes.has(c) : !!force; if (add) this.classes.add(c); else this.classes.delete(c); return add; }
     },
     dataset: {},
     innerHTML: '',
@@ -34,7 +35,8 @@ globalThis.document = {
       classes: new Set(),
       add(c) { this.classes.add(c); },
       remove(c) { this.classes.delete(c); },
-      contains(c) { return this.classes.has(c); }
+      contains(c) { return this.classes.has(c); },
+      toggle(c, force) { const add = force === undefined ? !this.classes.has(c) : !!force; if (add) this.classes.add(c); else this.classes.delete(c); return add; }
     }
   },
   querySelector(sel) {
@@ -53,6 +55,12 @@ globalThis.document = {
   removeEventListener() {}
 };
 
+if (typeof navigator === 'undefined') Object.defineProperty(globalThis, 'navigator', { value: { platform: '', userAgent: '' }, configurable: true });
+globalThis.addEventListener = () => {};
+globalThis.removeEventListener = () => {};
+globalThis.fetch = async () => ({ json: async () => ({}) });
+globalThis.requestAnimationFrame = fn => setTimeout(fn, 0);
+globalThis.cancelAnimationFrame = clearTimeout;
 globalThis.window = globalThis;
 globalThis.location = { href: 'http://localhost:7777/' };
 
