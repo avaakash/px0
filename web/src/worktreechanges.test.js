@@ -7,6 +7,138 @@ const tick = () => new Promise(r => setImmediate(r));
 const files = [{ path: 'same.ts', group: 'staged' }, { path: 'same.ts', group: 'unstaged' }];
 const inventory = ['A', 'B', 'C'].map(path => ({ path, available: true }));
 
+for (const [before, after] of [['unstaged', 'staged'], ['staged', 'unstaged']]) {
+  test('external ' + (after === 'staged' ? 'staging' : 'unstaging') + ' moves the selected file and refreshes its diff immediately', async () => {
+    let group = before, scans = 0;
+    const c = createWorktreeChangesController({
+      now: () => 0,
+      loadChanges: async () => { scans++; return { files: [{ path: 'new.py', group, status: group === 'staged' ? 'A' : 'U' }] }; },
+      loadDiff: async (path, file) => {
+        if (file.group !== group) { const error = new Error('file is no longer changed in this group'); error.status = 404; throw error; }
+        return { diff: group + ' contents' };
+      },
+      onChange() {},
+    });
+    c.setWorktrees(inventory); await c.selectWorktree('A');
+    group = after; // git add/reset happened in a terminal, outside px0's UI
+    await c.refreshDiff();
+    assert.equal(c.state().files[0].group, after);
+    assert.equal(c.state().selected, after + ':new.py');
+    assert.equal(c.state().diff.diff, after + ' contents');
+    assert.equal(c.state().error, '');
+    assert.equal(scans, 2, 'a stale group must bypass the warm list cache');
+  });
+}
+
+test('external list refresh follows the selected file into its new group', async () => {
+  let group = 'unstaged';
+  const c = createWorktreeChangesController({
+    loadChanges: async () => ({ files: [{ path: 'new.py', group }] }),
+    loadDiff: async (path, file) => ({ diff: file.group }), onChange() {},
+  });
+  c.setWorktrees(inventory); await c.selectWorktree('A');
+  group = 'staged'; await c.refreshExpanded(true);
+  assert.equal(c.state().selected, 'staged:new.py');
+  assert.equal(c.state().diff.diff, 'staged');
+});
+
+test('external partial staging refreshes both groups even while the working diff remains valid', async () => {
+  let partial = false, scans = 0;
+  const original = [{ path: 'same.py', group: 'unstaged', status: 'M' }];
+  const current = () => partial ? [...original, { path: 'same.py', group: 'staged', status: 'M' }] : original;
+  const c = createWorktreeChangesController({
+    now: () => 0,
+    loadChanges: async () => { scans++; return { files: current() }; },
+    loadDiff: async () => ({ diff: partial ? 'remaining working edits' : 'original', paths: ['same.py'], files: current() }), onChange() {},
+  });
+  c.setWorktrees(inventory); await c.selectWorktree('A'); c.rememberScroll(100);
+  partial = true; await c.refreshDiff();
+  assert.equal(c.state().files.length, 2); assert.equal(c.state().selected, 'unstaged:same.py');
+  assert.equal(c.state().diff.diff, 'remaining working edits'); assert.equal(c.state().positions.get('unstaged:same.py').top, 100);
+  await c.refreshDiff(); assert.equal(scans, 2, 'unchanged diff polls must not scan the entire checkout');
+});
+
+test('an older diff snapshot cannot undo a newer file-list refresh', async () => {
+  const response = deferred(); let partial = false, deferDiff = false, scans = 0;
+  const original = [{ path: 'same.py', group: 'unstaged', status: 'M' }];
+  const c = createWorktreeChangesController({
+    loadChanges: async () => { scans++; return { files: partial ? [...original, { path: 'same.py', group: 'staged', status: 'M' }] : original }; },
+    loadDiff: async () => deferDiff ? response.promise : { diff: 'original' }, onChange() {},
+  });
+  c.setWorktrees(inventory); await c.selectWorktree('A');
+  deferDiff = true; const pending = c.refreshDiff(); partial = true; await c.refreshExpanded(true);
+  response.resolve({ diff: 'older working content', paths: ['same.py'], files: original }); await pending;
+  assert.equal(c.state().files.length, 2); assert.equal(scans, 2);
+});
+
+test('external staging recovery waits out an older scan and reads a fresh snapshot', async () => {
+  const oldScan = deferred(); let group = 'unstaged', scans = 0;
+  const c = createWorktreeChangesController({
+    loadChanges: async () => ++scans === 2 ? oldScan.promise : { files: [{ path: 'new.py', group }] },
+    loadDiff: async (_, file) => {
+      if (file.group !== group) throw Object.assign(new Error('file is no longer changed in this group'), { status: 404 });
+      return { diff: group };
+    }, onChange() {},
+  });
+  c.setWorktrees(inventory); await c.selectWorktree('A');
+  const refresh = c.refreshExpanded(true); await tick();
+  group = 'staged'; const recovery = c.refreshDiff(); await tick();
+  oldScan.resolve({ files: [{ path: 'new.py', group: 'unstaged' }] });
+  await Promise.all([refresh, recovery]);
+  assert.equal(scans, 3); assert.equal(c.state().selected, 'staged:new.py');
+  assert.equal(c.state().diff.diff, 'staged'); assert.equal(c.state().error, '');
+});
+
+test('external staging recovery cannot steal a newer worktree selection', async () => {
+  const scan = deferred(); let staged = false, reads = 0;
+  const c = createWorktreeChangesController({
+    loadChanges: async path => path === 'A' && ++reads > 1 ? scan.promise : { files: [{ path: 'same.py', group: 'unstaged' }] },
+    loadDiff: async (path, file) => {
+      if (path === 'A' && staged && file.group === 'unstaged') throw Object.assign(new Error('file is no longer changed in this group'), { status: 404 });
+      return { diff: path + ':' + file.group };
+    }, onChange() {},
+  });
+  c.setWorktrees(inventory); await c.selectWorktree('A');
+  staged = true; const recovery = c.refreshDiff(); await tick();
+  await c.selectWorktree('B'); scan.resolve({ files: [{ path: 'same.py', group: 'staged' }] }); await recovery;
+  assert.equal(c.state().worktree, 'B'); assert.equal(c.state().diff.diff, 'B:unstaged');
+});
+
+test('leaving Changes cancels external staging recovery without reopening a diff', async () => {
+  const scan = deferred(); let moved = false, reads = 0, diffs = 0;
+  const c = createWorktreeChangesController({
+    loadChanges: async () => ++reads > 1 ? scan.promise : { files: [{ path: 'new.py', group: 'unstaged' }] },
+    loadDiff: async () => { diffs++; if (moved) throw Object.assign(new Error('file is no longer changed in this group'), { status: 404 }); return { diff: 'original' }; }, onChange() {},
+  });
+  c.setWorktrees(inventory); await c.selectWorktree('A');
+  moved = true; const recovery = c.refreshDiff(); await tick(); c.pause();
+  scan.resolve({ files: [{ path: 'new.py', group: 'staged' }] }); await recovery;
+  assert.equal(diffs, 2); assert.equal(c.state().loading, false);
+});
+
+test('external commit removes a stale file without leaving a group error', async () => {
+  let committed = false;
+  const c = createWorktreeChangesController({
+    loadChanges: async () => ({ files: committed ? [] : [{ path: 'new.py', group: 'staged' }] }),
+    loadDiff: async () => { if (committed) throw Object.assign(new Error('file is no longer changed in this group'), { status: 404 }); return { diff: 'original' }; }, onChange() {},
+  });
+  c.setWorktrees(inventory); await c.selectWorktree('A'); committed = true; await c.refreshDiff();
+  assert.deepEqual(c.state().files, []); assert.equal(c.state().selected, ''); assert.equal(c.state().error, '');
+});
+
+test('external recovery is bounded and genuine diff failures do not trigger rescans', async () => {
+  for (const status of [404, 500]) {
+    let broken = false, scans = 0, diffs = 0;
+    const c = createWorktreeChangesController({
+      loadChanges: async () => { scans++; return { files: [{ path: 'new.py', group: 'unstaged' }] }; },
+      loadDiff: async () => { diffs++; if (broken) throw Object.assign(new Error('diff failure'), { status }); return { diff: 'original' }; }, onChange() {},
+    });
+    c.setWorktrees(inventory); await c.selectWorktree('A'); broken = true; await c.refreshDiff();
+    assert.equal(scans, status === 404 ? 2 : 1); assert.equal(diffs, status === 404 ? 3 : 2);
+    assert.equal(c.state().error, 'diff failure'); assert.equal(c.state().loading, false);
+  }
+});
+
 test('display names persist by checkout path without changing Git identity or review state', async () => {
   const prefs = [], reads = [];
   const setup = { loadChanges: async p => { reads.push(p); return { files }; }, loadDiff: async () => ({ diff: 'content' }), onChange() {}, onPreferences: value => prefs.push(value) };
@@ -150,4 +282,43 @@ test('staging failures preserve file state and release busy controls', async () 
   c.setWorktrees(inventory); await c.selectWorktree('A');
   await assert.rejects(c.mutateWorktree('A', 'unstaged', files[1]), /locked/);
   assert.deepEqual(c.state().files, files); assert.equal(c.state().views.get('A').mutating, false);
+});
+
+test('reload restores the selected worktree, file and scroll against fresh Git state', async () => {
+  let saved;
+  const options = {
+    expanded: ['A', 'B'], onChange() {},
+    loadChanges: async () => ({ files: [{ path: 'first.py', group: 'unstaged' }, { path: 'second.py', group: 'staged' }] }),
+    loadDiff: async (path, file) => ({ diff: path + ':' + file.path }),
+  };
+  const before = createWorktreeChangesController(options);
+  before.setWorktrees(inventory); await before.selectWorktree('B'); await before.selectFile('B', 'staged:second.py');
+  before.rememberScroll(143, 21); saved = before.session();
+  const after = createWorktreeChangesController(options);
+  after.setWorktrees(inventory); await after.restoreSession(saved);
+  assert.equal(after.state().worktree, 'B'); assert.equal(after.state().selected, 'staged:second.py');
+  assert.equal(after.state().diff.diff, 'B:second.py');
+  assert.deepEqual(after.state().positions.get('staged:second.py'), { top: 143, left: 21 });
+});
+
+test('reload reconciles moved/deleted files and ignores unavailable worktrees', async () => {
+  const saved = { active: 'A', views: [{ path: 'A', file: { path: 'same.py', group: 'unstaged' }, positions: [] }] };
+  for (const files of [[{ path: 'same.py', group: 'staged' }], []]) {
+    const c = createWorktreeChangesController({ expanded: ['A'], onChange() {}, loadChanges: async () => ({ files }), loadDiff: async () => ({ diff: 'fresh' }) });
+    c.setWorktrees(inventory); await c.restoreSession(saved);
+    assert.equal(c.state().selected, files.length ? 'staged:same.py' : ''); assert.equal(c.state().error, '');
+  }
+  let reads = 0;
+  const c = createWorktreeChangesController({ onChange() {}, loadChanges: async () => { reads++; return { files: [] }; }, loadDiff: async () => { reads++; } });
+  c.setWorktrees(inventory); await c.restoreSession({ ...saved, active: 'removed', views: [{ path: 'removed', file: saved.views[0].file }] });
+  assert.equal(c.state().worktree, ''); assert.equal(reads, 0);
+});
+
+test('a user selection made during reload recovery wins over saved state', async () => {
+  const pending = deferred();
+  const c = createWorktreeChangesController({ expanded: ['A'], onChange() {}, loadChanges: async path => path === 'A' ? pending.promise : { files: [{ path: 'b.py', group: 'unstaged' }] }, loadDiff: async path => ({ diff: path }) });
+  c.setWorktrees(inventory);
+  const restoring = c.restoreSession({ active: 'A', views: [{ path: 'A', file: { path: 'a.py', group: 'unstaged' } }] });
+  await c.selectWorktree('B'); pending.resolve({ files: [{ path: 'a.py', group: 'unstaged' }] }); await restoring;
+  assert.equal(c.state().worktree, 'B'); assert.equal(c.state().diff.diff, 'B');
 });

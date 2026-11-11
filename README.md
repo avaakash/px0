@@ -34,16 +34,12 @@ See full performance benchmarks and comparisons at [px0.ai/benchmarks](https://p
 
 ## Installation
 
-Quick install (macOS, Linux, BSD):
+Download this fork's macOS binaries from [avaakash/px0 releases](https://github.com/avaakash/px0/releases), or build from source below.
+
+Build from source (requires Go 1.25+ and Node.js or Bun):
 
 ```bash
-curl -fsSL https://px0.ai/install.sh | sh
-```
-
-Build from source (requires Go 1.24+ and Node.js or Bun):
-
-```bash
-git clone https://github.com/px0-ai/px0.git
+git clone https://github.com/avaakash/px0.git
 cd px0
 make build
 install -d ~/.local/bin && install px0 ~/.local/bin/
@@ -54,6 +50,16 @@ To update an existing installation:
 ```bash
 px0 --update
 ```
+
+This fork checks **avaakash/px0** for newer stable releases in the background,
+at most once every 24 hours. Updates verify SHA-256 checksums and the downloaded
+version before replacing the installed binary. Restart px0 to use an installed
+update; the current session keeps running. Use `-no-update` to disable automatic
+checks, or `--update` to check immediately. Both `macos-v0.1.22` and `v0.1.22`
+release tags are supported. `PX0_REPO=owner/repo` explicitly overrides the source.
+
+Local builds newer than the published release are kept. Old upstream update
+caches are ignored when moving to this fork. Details: [Self-update](docs/internals/self-update.md).
 
 ## Usage
 

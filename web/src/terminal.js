@@ -3,12 +3,13 @@ import { on, emit } from './bus.js';
 import { showToast } from './ui.js';
 import { worktreeLabel } from './worktreechanges.js';
 import { readTerminalFrames, terminalBytesBase64 } from './terminal-stream.js';
+import { terminalRestoreSelection } from './workspace-session-state.js';
 import { terminalHeightBounds, terminalHeight, terminalThemeColors } from './terminal-layout.js';
 
 const terminalViews = new Map();
 let terminalActiveID = '', terminalOpening = false, terminalAssetsPromise, terminalHeaderSignature = '';
 let terminalTarget = { root: '', label: '' };
-let terminalPanelHeight = 260;
+let terminalPanelHeight = 260, terminalRestorePromise = Promise.resolve(), terminalSelectionRevision = 0;
 try { const saved = Number(localStorage.getItem('px0.terminal.height')); if (saved > 0) terminalPanelHeight = saved; } catch {}
 function terminalAssets() {
   if (!terminalAssetsPromise) terminalAssetsPromise = (async () => {
@@ -110,6 +111,7 @@ function fitTerminal(view) {
   try { view.fit.fit(); } catch {}
 }
 function selectTerminalView(view, focusTerminal = true) {
+  terminalSelectionRevision++;
   terminalActiveID = view.id;
   $('#terminal-panel').hidden = false; sizeTerminalPanel();
   for (const item of terminalViews.values()) { item.element.hidden = item !== view; if (item !== view) item.abort?.abort(); }
@@ -118,7 +120,7 @@ function selectTerminalView(view, focusTerminal = true) {
   emit('layout:changed');
 }
 async function connectTerminal(view) {
-  if (view.connecting || view.exited || view.closed || $('#terminal-panel').hidden || view.id !== terminalActiveID) return;
+  if (view.connecting || view.exited && view.replayed || view.closed || $('#terminal-panel').hidden || view.id !== terminalActiveID) return;
   view.connecting = true; view.abort = new AbortController();
   try {
     const response = await fetch(new URL('api/terminal/stream', document.baseURI), {
@@ -135,7 +137,7 @@ async function connectTerminal(view) {
       });
       if (view.closed) return;
       if (frame.offset !== undefined) view.offset = frame.offset;
-      if (frame.exited) { view.exited = true; view.term.writeln('\r\n[Shell exited' + (frame.code ? ': ' + frame.code : '') + ']'); updateTerminalHeader(); }
+      if (frame.exited) { view.exited = true; view.replayed = true; view.term.writeln('\r\n[Shell exited' + (frame.code ? ': ' + frame.code : '') + ']'); updateTerminalHeader(); }
     });
     if (!view.exited && !view.closed) throw new Error('Terminal disconnected; reconnecting');
   } catch (error) {
@@ -180,6 +182,7 @@ async function addTerminalView(info, label = '') {
   connectTerminal(view); return view;
 }
 export async function openTerminal(root = '', label = '', fresh = false) {
+  await terminalRestorePromise;
   if (terminalOpening) return;
   terminalOpening = true; $('#terminal-open').disabled = true;
   try {
@@ -201,7 +204,7 @@ async function closeTerminal(id) {
   const view = terminalViews.get(id); if (!view || view.closing) return;
   view.closing = true; updateTerminalHeader();
   try {
-    if (!view.exited) await apiPostJson('/api/terminal/close', { id: view.id, token: view.token });
+    await apiPostJson('/api/terminal/close', { id: view.id, token: view.token });
     const index = [...terminalViews.keys()].indexOf(id);
     view.closed = true; view.abort?.abort(); clearTimeout(view.retry); view.observer.disconnect(); view.term.dispose(); view.element.remove(); terminalViews.delete(id);
     if (terminalActiveID === id) {
@@ -214,7 +217,7 @@ async function closeTerminal(id) {
 }
 export function initTerminal() {
   $('#btn-terminal').addEventListener('click', () => openTerminal());
-  $('#terminal-hide').addEventListener('click', () => { $('#terminal-panel').hidden = true; for (const view of terminalViews.values()) view.abort?.abort(); emit('layout:changed'); });
+  $('#terminal-hide').addEventListener('click', () => { terminalSelectionRevision++; $('#terminal-panel').hidden = true; for (const view of terminalViews.values()) view.abort?.abort(); emit('layout:changed'); });
   $('#terminal-open').addEventListener('click', () => openTerminal('', '', true));
   $('#terminal-rename-dialog').addEventListener('keydown', e => e.stopPropagation());
   $('#terminal-rename-cancel').addEventListener('click', () => $('#terminal-rename-dialog').close());
@@ -259,10 +262,27 @@ export function initTerminal() {
     updateTerminalHeader();
   });
   on('mode:changed', mode => { dockTerminalPanel(mode); if (mode !== 'worktrees') terminalTarget = { root: S.meta?.root || '', label: S.meta?.name || '' }; });
-  // List/reconnect only existing shells after a reload; never spawn shells at startup.
-  apiPostJson('/api/terminal/list', {}).then(async result => {
-    for (const info of result.sessions || []) { if (!info.exited) await addTerminalView(info); }
-    updateTerminalHeader();
-  }).catch(() => {});
   addEventListener('beforeunload', () => { for (const view of terminalViews.values()) { view.closed = true; view.abort?.abort(); clearTimeout(view.retry); } });
+}
+
+export function terminalSession() {
+  return { active: terminalActiveID, visible: !$('#terminal-panel').hidden, height: terminalPanelHeight };
+}
+export function restoreTerminalSession(saved) {
+  const revision = terminalSelectionRevision;
+  if (Number.isFinite(saved?.height) && saved.height > 0) terminalPanelHeight = saved.height;
+  terminalRestorePromise = (async () => {
+    // Reconnect only shells still owned by this px0 process; never spawn a shell
+    // from saved browser state, and never persist the server's session tokens.
+    const result = await apiPostJson('/api/terminal/list', {});
+    for (const info of result.sessions || []) await addTerminalView(info);
+    if (revision !== terminalSelectionRevision) return;
+    const restore = terminalRestoreSelection([...terminalViews.values()], saved);
+    terminalActiveID = restore.active;
+    const view = terminalViews.get(terminalActiveID);
+    for (const item of terminalViews.values()) item.element.hidden = item !== view;
+    if (view && restore.visible) selectTerminalView(view, false);
+    else { $('#terminal-panel').hidden = true; updateTerminalHeader(); }
+  })().catch(error => showToast('!', 'Could not restore terminals: ' + error.message));
+  return terminalRestorePromise;
 }

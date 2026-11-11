@@ -42,7 +42,7 @@ const request = async (method, path, params, opts = {}) => {
   const r = await fetch(u, fetchOpts);
   const j = await r.json();
   // The body rides along: some replies, like a failed agent job, carry detail beyond the message.
-  if (j.error) throw Object.assign(new Error(j.error), { body: j });
+  if (j.error) throw Object.assign(new Error(j.error), { body: j, status: r.status });
   return j;
 };
 export const api = (path, params, opts) => request('GET', path, params, opts);

@@ -6,6 +6,8 @@ This directory contains in-depth technical write-ups explaining how px0 achieves
 
 ## 1. Subsystem Architecture Map
 
+- [Fork self-update](self-update.md): release sources, tag/asset naming, cache migration, and verified binary replacement.
+
 ```mermaid
 flowchart TD
     subgraph Client ["Browser Frontend (Vanilla JS + CSS, Virtualized)"]

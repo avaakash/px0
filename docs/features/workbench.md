@@ -45,6 +45,17 @@ hidden worktrees do no change scanning; expanded lists refresh every ten seconds
 with at most two scans in flight. The selected diff refreshes every two seconds
 by checking only that file, while the page is visible. **Refresh** also discovers
 newly created worktrees. Use **+** to stage a file and **−** to unstage it.
+Click **Staged Changes**, **Changes**, or **Merge Changes** to collapse or expand
+that group. Each worktree remembers its own choices in this browser, including
+after refresh or restart. Collapsing a group keeps the selected diff open and
+leaves its file count and bulk staging action available in the header.
+
+Staging or unstaging from a terminal updates this view too. If the selected file
+moves groups, px0 refreshes the list and keeps that file selected in its new
+group. Returning to the browser refreshes expanded worktrees immediately;
+background list checks run every ten seconds while visible. Collapsed worktrees
+remain unscanned, and your saved group-collapse choices remain unchanged.
+
 Each change group has **Stage all** or **Unstage all**, scoped to that group's
 checkout. Clear the file filter to enable group actions. A partially staged file appears in both groups; staging adds its
 current working contents, while unstaging preserves the file on disk. Actions
@@ -155,3 +166,76 @@ What you opened, and which clone each repository's PRs use, is saved in `$XDG_ST
 ## Flags
 
 The workbench passes `-no-lsp`, `-no-git`, `-no-agent`, `-no-telemetry` and `-agent` on to every workspace it opens. `-host`, `-port`, `-base-path` and `-no-open` apply to the workbench itself. To open the current directory directly, as before, run `px0 .`.
+
+
+## GitHub PR status in Worktree Changes
+
+Each visible worktree's branch is matched to an open GitHub.com PR using its
+Git remotes and published branch. A local branch renamed after publishing can
+use its tracked branch name. An `upstream` remote allows a fork's PR to be found
+in its base repository. Several matching PRs are reported as ambiguous rather
+than selecting one silently. There is no automatic checkout or fetch.
+
+A successful lookup with no open PR shows **PR not raised**. Lookup failures
+show their error without claiming that no PR exists. If a worktree was removed,
+the worktree list refreshes automatically.
+
+The status row shows **Reviewer requested**, **Review received**, or **Approval
+received**, plus the check summary. If none applies, it shows **No reviewer
+requested**. Click it for reviewer names and individual checks. Changes requested
+are shown separately, including when a different reviewer approved.
+**Approval received** appears only after a submitted approval and GitHub's
+required-review decision is green for the same pushed commit. This includes
+Code Owner approval when the repository requires it, the required approval
+count, and GitHub's stale/last-push approval rules. An individual approval while
+GitHub still requires reviews remains **Review received**. The dialog lists
+individual **Approving reviews** separately from the overall decision.
+
+Missing permissions, an unavailable decision, a changed PR head or a failed
+refresh never produce a green approval label. Checks and other merge conditions
+remain separate: a green review requirement does not mean every merge rule has
+passed. Dismissed approvals are not counted; a later comment does not revoke an
+approval. Only submitted reviews count, not ordinary PR conversation comments.
+
+Checks cover both the latest pushed PR head and its current merge-test commit,
+including third-party commit statuses. No checks, skipped checks, running checks,
+failed checks, and all-passed results remain distinct. Local uncommitted changes
+are not tested by these remote results. Select up to 20 failed GitHub Actions
+jobs and click **Rerun selected**; GitHub can also rerun their dependent jobs.
+Successful requests and failed requests are reported individually. Other check
+providers remain viewable through their links, without a rerun checkbox.
+
+Use the **GitHub** button to open connection settings. The existing saved token,
+`GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth login` sign-in is reused. Private PRs need
+Pull requests read, Checks read, Commit statuses read, and Actions read access;
+reruns additionally need repository access and Actions write permission. No
+inline comments, replies, review submission, or reviewer assignment actions are
+added to this view.
+
+PR status loads separately from local file status, at two concurrent frontend
+requests, cached for two minutes. Hidden worktrees and hidden browser tabs do
+not poll. **Refresh** bypasses the cache. GitHub failures preserve the last
+visible result marked out of date; reruns remain disabled until a fresh result
+is available. A px0 restart is not needed after saving a token; use Refresh.
+
+
+## Restore after a page reload
+
+px0 remembers each workspace's active Code, Review or Changes view, open file
+tabs and selection, source/diff positions, explorer folders, panel widths and
+visibility, and the active worktree diff, file filter and diff layout. Existing
+worktree display names, hidden worktrees and expanded/collapsed change groups
+remain saved. A file that moved between staged and unstaged groups is matched
+against fresh Git status; deleted files and removed worktrees are skipped.
+
+The terminal panel restores its height, visibility and selected terminal,
+including renamed terminals. Reload reconnects to existing shells and replays
+recent output without running a new shell or resending commands. Shells keep
+their current directory, environment and running processes while px0 remains
+running. Stopping px0 ends those shells; a later start does not recreate them.
+Closed terminals stay closed, including shells that had already exited.
+
+View metadata is saved in this browser's local storage, separately per workspace
+and browser origin. No file contents, terminal commands, output or connection
+tokens are stored there. Clearing browser storage resets the saved view. A
+file/line URL takes precedence over the saved file and view.

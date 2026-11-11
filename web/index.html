@@ -210,7 +210,7 @@
 
     <section id="worktree-changes-view" class="wt-view" hidden aria-label="Worktree Changes">
       <aside class="wt-sidebar">
-        <header class="wt-side-head"><h2>Worktree Changes</h2><button id="wt-refresh" type="button" class="mini" title="Refresh worktrees and changes" aria-label="Refresh worktree changes">↻</button></header>
+        <header class="wt-side-head"><h2>Worktree Changes</h2><button id="wt-github" type="button" class="mini" title="GitHub connection settings">GitHub</button><button id="wt-refresh" type="button" class="mini" title="Refresh worktrees, PR status and changes" aria-label="Refresh worktree changes">↻</button></header>
         <input id="wt-filter" class="wt-filter" type="search" placeholder="Filter changed files…" aria-label="Filter changed files" autocomplete="off">
         <p id="wt-status" class="wt-status" role="status" aria-live="polite" hidden></p>
         <nav id="wt-files" class="wt-files" aria-label="Changed files in selected worktree"></nav>
@@ -222,6 +222,13 @@
         <div id="wt-diff" class="wt-diff" tabindex="0" aria-label="Selected worktree file diff"></div>
       </div>
     </section>
+
+    <dialog id="wt-pr-dialog" class="wt-pr-dialog" aria-labelledby="wt-pr-title">
+      <header><h2 id="wt-pr-title">Pull request</h2><button id="wt-pr-close" type="button" aria-label="Close pull request status">×</button></header>
+      <div id="wt-pr-body" class="wt-pr-body"></div>
+      <p id="wt-pr-message" role="status" aria-live="polite"></p>
+      <footer><button id="wt-pr-refresh" type="button">Refresh</button><button id="wt-pr-rerun" type="button" disabled>Rerun selected</button></footer>
+    </dialog>
 
     <dialog id="wt-rename-dialog" class="wt-rename-dialog" aria-labelledby="wt-rename-title" aria-describedby="wt-rename-help">
       <form id="wt-rename-form">

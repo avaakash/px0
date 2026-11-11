@@ -7,6 +7,27 @@ export const TIPS_STORAGE_KEY_INDEX = 'px0.tips.lastIndex';
 
 export const DEFAULT_TIPS = [
   {
+    id: "workspace-reload-state",
+    title: "Pick Up After Reload",
+    category: "Workbench",
+    tag: "Reload",
+    content: "Reloading remembers your workspace view, selected worktree diff, open files and terminal panel. Existing shells reconnect with recent output while px0 stays running; stopping px0 ends those shells."
+  },
+  {
+    id: "fork-auto-update",
+    title: "Updates from Your Fork",
+    category: "Workbench",
+    tag: "Updates",
+    content: "px0 checks **avaakash/px0** for newer stable releases in the background once a day. Your current session keeps running; restart px0 to use an installed update. Run **`px0 --update`** to check immediately, or start with **`-no-update`** to skip automatic checks."
+  },
+  {
+    id: "worktree-pr-status",
+    title: "PR Reviews and Checks per Worktree",
+    category: "Git",
+    tag: "Worktrees",
+    content: "Each worktree shows reviewer activity and checks. **Approval received** appears only when GitHub's required-review status is green, including Code Owners when required. Open the status to see individual reviews or rerun selected failed GitHub Actions jobs."
+  },
+  {
     id: "worktree-terminal-stage",
     title: "Terminal and Staging per Worktree",
     category: "Git",
@@ -18,7 +39,7 @@ export const DEFAULT_TIPS = [
     title: "Review Worktrees Without Reloading",
     category: "Git",
     tag: "Worktrees",
-    content: "Open **Changes** to expand several worktrees and review their staged, unstaged, and new files together. Use the pencil to set a display name, hide unwanted checkouts with ×, and restore them under **Hidden worktrees**; switching files keeps the page and editor tabs alive."
+    content: "Open **Changes** to expand several worktrees and review their staged, unstaged, and new files together. Click a **Staged Changes** or **Changes** header to collapse its files; each worktree remembers its own groups. Use the pencil to set a display name, hide unwanted checkouts with ×, and restore them under **Hidden worktrees**; switching files keeps the page and editor tabs alive."
   },
   {
     id: "file-navigation",

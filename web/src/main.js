@@ -35,6 +35,7 @@ import { initTips, startTipsAsync } from './tips.js';
 import { initReviewFlow } from './reviewflow.js';
 import { initWorktreeChanges, openWorktreeChanges } from './worktreechanges.js';
 import { initTerminal } from './terminal.js';
+import { loadWorkspaceSession, restoreWorkspaceSession } from './workspace-session.js';
 
 // Initialize all subsystems
 initRenderer();
@@ -100,6 +101,7 @@ initPRScope();
 
   measure();
   S.meta = await api('/api/meta');
+  const savedSession = loadWorkspaceSession(S.meta.root);
   if (S.meta.metrics) updateMetricsDisplay(S.meta.metrics);
   refreshLspMenu();
   updateSidebarToggleState();
@@ -173,7 +175,7 @@ initPRScope();
       window.history.replaceState({}, '', cleanUrl);
     } catch {}
   } else {
-    if (hasGitChanges) await selectChangedFileTab();
+    if (hasGitChanges && !savedSession) await selectChangedFileTab();
   }
 
   if (inGitMode()) {
@@ -184,6 +186,7 @@ initPRScope();
     collapseAllDirs();
   }
   setAutoRevealSuppressed(false);
+  await restoreWorkspaceSession(savedSession, { initialPath: !!initialPath });
 
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(() => { measure(); layout(); render(); });
@@ -204,7 +207,7 @@ initPRScope();
           setAutoRevealSuppressed(true);
           await refreshTree();
           await triggerRefresh();
-          if (!initialPath) {
+          if (!initialPath && !savedSession) {
             hasGitChanges = await applyGitSidebarState();
             if (hasGitChanges) await selectChangedFileTab();
             if (inGitMode()) {

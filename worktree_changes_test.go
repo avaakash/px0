@@ -102,6 +102,22 @@ func TestWorktreeChangesReviewWithoutWorkspaceSwitch(t *testing.T) {
 		if code != 200 || !strings.Contains(diff["diff"].(string), "+"+group+" in selected worktree") {
 			t.Fatalf("wrong %s diff: %d %v", group, code, diff)
 		}
+		metadata, ok := diff["files"].([]any)
+		paths, pathsOK := diff["paths"].([]any)
+		if !ok || len(metadata) != 2 || !pathsOK || len(paths) != 1 || paths[0] != "keep.go" {
+			t.Fatalf("diff omits its scoped staged/unstaged status: %v", diff)
+		}
+		groups := map[string]bool{}
+		for _, raw := range metadata {
+			entry := raw.(map[string]any)
+			if entry["path"] != "keep.go" {
+				t.Fatalf("diff status leaks an unrelated file: %v", entry)
+			}
+			groups[entry["group"].(string)] = true
+		}
+		if !groups["staged"] || !groups["unstaged"] {
+			t.Fatalf("partial staging metadata is incomplete: %v", metadata)
+		}
 	}
 	code, diff := request("diff", url.Values{"path": {"new file.txt"}, "group": {"unstaged"}})
 	if code != 200 || !strings.Contains(diff["diff"].(string), "+untracked in selected worktree") {

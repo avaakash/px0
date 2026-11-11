@@ -1,90 +1,72 @@
-# Publishing & Release Guide
+# Publishing this fork
 
-This document outlines the step-by-step instructions for preparing, testing, and publishing a new release of `px0`.
+This fork publishes to [avaakash/px0](https://github.com/avaakash/px0). Its
+self-updater checks this repository's latest stable release. The upstream
+px0.ai installer belongs to the upstream project; use this fork's release
+assets or build its source.
 
-## 1. Prerequisites
+## Prepare a release
 
-Before cutting a new release, ensure you have:
+Use the Go version declared in `go.mod` and Node.js 20+ (or Bun). Complete all
+feature changes, bundle the frontend, run the tests, and build both macOS targets.
+The local worktree should be clean before tagging. Document any known test
+failures rather than describing a partial run as a clean suite.
 
-- Git with push and tag permissions for `px0-ai/px0`.
-- Go (version 1.24+).
-- Node.js (v18+ or v20+) or Bun for bundling frontend assets.
-- A clean working tree with all tests passing.
-
-## 2. Pre-Release Verification
-
-Run the test suite and verify asset bundling:
-
-```bash
-# 1. Run unit and integration tests
-make test
-
-# 2. Build local binary and verify sanity
-make build
-./px0 --version
+```sh
+node scripts/build-web.js
+go test ./...
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/px0-0.1.22-darwin-arm64 .
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/px0-0.1.22-darwin-amd64 .
 ```
 
-## 3. Release Methods
-### Method 1: Automated Release via Makefile (Recommended)
+The version in the filenames must match `VERSION`. Commit feature/release fixes
+first, then commit the version bump separately. Publish only after authorization.
 
-The project includes an automated `make publish` target in the [Makefile](Makefile) that:
+## Automated macOS release
 
-1. Updates the [VERSION](VERSION) file.
-1. Bundles web assets and cross-compiles binaries into `dist/`.
-1. Commits `VERSION`.
-1. Creates an annotated Git tag `v<version>`.
+Push a `macos-vX.Y.Z` tag on the desired committed source, with `VERSION` set to
+`X.Y.Z`. For example, after committing and validating version 0.1.22:
 
-#### Step 1: Run publish command
-
-Specify the version without a leading `v`:
-
-```bash
-make publish 0.2.0
+```sh
+git push origin HEAD
+git tag -a macos-v0.1.22 -m 'px0 0.1.22 for macOS'
+git push origin macos-v0.1.22
 ```
 
-#### Step 2: Push commit and tags to GitHub
+The [Release workflow](https://github.com/avaakash/px0/actions/workflows/release.yml)
+checks out that exact tag, verifies `VERSION`, bundles the tagged frontend, builds
+Apple Silicon and Intel binaries with CGO disabled, writes SHA-256 checksums, and
+publishes a stable GitHub release. A `vX.Y.Z` tag instead builds the existing
+cross-platform target set. Tags must be unique; do not move a published tag.
 
-```bash
-git push origin master --tags
-```
+For manual workflow dispatch, supply an existing stable tag and run the workflow
+from a branch containing the updated workflow. It still builds the tagged source,
+not the selected branch. Both source and VERSION must already be committed.
 
-### Method 2: Manual Release via Git
+## Manual asset upload
 
-```bash
-# 1. Update VERSION file
-echo "0.2.0" > VERSION
+If building and publishing locally instead of using the tag-triggered workflow,
+keep all files from the same source/version and avoid concurrent uploads from a
+workflow run. Required release files for macOS are:
 
-# 2. Bundle frontend assets and compile release binaries
-make dist
+- `px0-X.Y.Z-darwin-arm64`
+- `px0-X.Y.Z-darwin-amd64`
+- `checksums.txt`, with each binary's SHA-256 hash and exact filename
 
-# 3. Commit version bump
-git add VERSION
-git commit -m "Release v0.2.0"
+Use a draft release to upload and verify all assets before publication. Verify
+GitHub's uploaded asset digests against local hashes. Do not mark experimental
+builds as the latest stable release. Updating the GitHub source or pushing a
+branch alone does not make an auto-update available; a published stable release
+with matching binary assets is required.
 
-# 4. Tag the release
-git tag -fa v0.2.0 -m "Release v0.2.0"
+## Verify the published release
 
-# 5. Push to GitHub
-git push origin master
-git push origin v0.2.0
-```
+Check the workflow result and [release assets](https://github.com/avaakash/px0/releases).
+Test `px0 --update` on a disposable copy of an older binary first. The updater
+must verify the checksum and embedded version, then replace only that copy.
+Normal launches check in the background at most once per day and keep the
+current session running; restart to load a downloaded update. `-no-update`
+remains available, but is no longer needed to prevent updates from upstream.
 
-### Method 3: GitHub Actions Workflow Dispatch
-
-1. Navigate to Actions -> Release on GitHub: `https://github.com/px0-ai/px0/actions/workflows/release.yml`
-1. Click Run workflow.
-1. Enter the version tag (e.g. `v0.2.0`).
-1. Trigger the workflow.
-
-## 4. Post-Release Verification
-
-1. Verify GitHub Actions workflow completion on the Actions tab.
-1. Confirm artifacts on the [Releases](https://github.com/px0-ai/px0/releases) page (cross-platform binaries and `checksums.txt`). The self-updater requires this file and verifies the selected binary against it before execution.
-1. Verify the installer script:
-  ```bash
-  curl -fsSL https://px0.ai/install.sh | sh
-  ```
-1. Verify self-update functionality:
-  ```bash
-  px0 --update
-  ```
+Release binaries are standalone CLI executables, not `.app` bundles. The current
+workflow does not provide Developer ID signing or notarization.

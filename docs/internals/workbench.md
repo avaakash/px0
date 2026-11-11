@@ -166,3 +166,95 @@ closing the last row hides the panel. The session list remains visible for a
 single terminal. The toolbar contains only new/hide controls; Ctrl-C forwards
 interrupts directly. Worktree status text is reserved for errors and empty-state
 explanations, with the routine worktree count/expand hint omitted.
+
+
+### External staging refresh
+
+External index changes are reconciled by the worktree Changes controller too.
+A diff request returning 404 for an obsolete group forces a fresh bounded list
+read, follows the selected file by path into its new group, and retries the diff
+once. Recovery waits out a preexisting status scan rather than trusting a snapshot
+started before the index changed. Selection revisions and cancellation prevent
+late recovery from replacing a newer checkout/file selection. Periodic full-list
+refreshes explicitly bypass the warm cache (avoiding a ten-second timer plus
+ten-second cache accidentally producing twenty-second updates); focus/visibility
+return refreshes expanded checkouts immediately. Ordinary diff/network errors
+remain errors and do not enter an unbounded refresh loop.
+
+Successful diff replies include the `files`/`paths` from their existing scoped
+status read. A changed snapshot detects partial staging even when the working
+diff is still valid; that triggers the same one-time list reconciliation. A
+newer list replaces the array identity, so an older diff reply cannot overwrite
+it or trigger a redundant recovery. Unchanged two-second polls still scan only
+the requested file, not the whole repository.
+
+### Per-worktree GitHub status
+
+`worktree_pr.go` adds GET `/api/git/worktrees/pr?worktree=...&refresh=1` and
+same-origin POST `/api/git/worktrees/pr/rerun`. Both require explicit registered
+checkout paths. Discovery resolves trusted GitHub.com repository identifiers from
+local Git configuration; remote API URLs and repository names cannot be supplied
+by callers. Authentication reuses settings/environment or a bounded shared gh
+lookup. No credentials appear in the browser response.
+
+The independent status service shares in-flight requests and holds at most 100
+idle cache entries, keyed by checkout/branch/remote configuration and a token
+hash. A two-minute cache and four backend request slots bound network work.
+Pagination is fixed-host and limited to ten pages, with incomplete results
+reported as errors rather than a false green. The frontend has its own queue
+and cache in `worktree-pr-state.js`; it never waits in the local diff loader.
+Only the small PR status slots repaint when remote state changes.
+
+Reruns accept PR number, head SHA, and selected check IDs. The backend rediscovers
+the PR and refreshes checks, verifies every selection is a failed Actions check,
+then reads each job and verifies its check-run URL and current PR head/merge SHA
+before the first write. It posts each selected job's rerun independently and
+returns per-job receipts. Accepted job IDs have a short deduplication window;
+partial success never silently retries accepted jobs. Mutation requests are
+serialized separately from status reads. No endpoint fetches comment bodies or
+changes the worktree/index.
+
+Tests use a local HTTP GitHub stand-in with the real request serialization path.
+They cover fork mapping, stale-head and foreign selection rejection, all-before-
+write validation, partial success, auth error redaction, cache sharing, bounded
+pagination and cancellation recovery. Live third-party reruns are not simulated
+as supported actions.
+
+
+### Browser reload state
+
+`web/src/workspace-session.js` coordinates restoration after `/api/meta` identifies
+the workspace, before the readiness poll can auto-select another file. A versioned
+local-storage record is scoped by workspace root within the browser origin.
+`workspace-session-state.js` bounds the record and treats blocked, malformed or
+full storage as a fresh view. Saves are debounced, skip identical snapshots, and
+flush on pagehide/visibility changes. Only view metadata is serialized; document
+contents, terminal tokens, shell input and output are excluded.
+
+Worktree restoration uses fresh registered-worktree inventory and Git status,
+retains scroll positions when a selected file changes groups, and cannot override
+a newer manual selection. Existing independent expansion/name preferences remain
+in their established store. A source URL overrides saved file/mode selection.
+Terminal restoration lists the current process's sessions and selects an existing
+ID; it never calls the open endpoint or replays input. Output is replayed through
+the existing bounded stream buffer. Exited sessions can be viewed and explicitly
+closing them removes their server entry, so they do not reappear on reload.
+No tmux dependency or persistence across px0 process shutdown is introduced.
+
+
+### Required-review approval badge
+
+`fetchWorktreeApproval` issues a fixed read-only GraphQL query for the PR's
+`reviewDecision`, number, state and head OID. It shares the existing per-worktree
+PR cache and authentication and has a five-second sub-timeout. Only `APPROVED`
+for the same open PR/head, with a submitted approving review, promotes the
+summary to `approved` / `reviewRequirements: satisfied`. `REVIEW_REQUIRED` and
+`CHANGES_REQUESTED` retain the ordinary review summary. HTTP, GraphQL (including
+partial-data), permission and missing-data failures leave the gate unknown
+without discarding reviewer names or check status. A failed later refresh
+suppresses the cached green badge. This uses GitHub's required-review gate,
+including Code Owners when required; it does not infer merge readiness from
+reviewer names or the overall mergeability/checks state.
+
+Contract references: [GitHub pull request review decision](https://docs.github.com/en/graphql/reference/pulls#pullrequestreviewdecision)
+and [required reviews](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches#require-pull-request-reviews-before-merging).

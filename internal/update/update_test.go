@@ -34,6 +34,9 @@ func TestCompareSemver(t *testing.T) {
 		{"0.10.0", "0.9.0", 1},
 		{"0.1.0-alpha", "0.1.0", 0},
 		{"0.2.0", "0.1.99", 1},
+		{"macos-v0.1.22", "0.1.21", 1},
+		{"macos-v1.0.0", "0.9.99", 1},
+		{"macos-v1.2.3", "v1.2.3", 0},
 	}
 
 	for _, tt := range tests {
@@ -260,7 +263,7 @@ func TestInstallUpdate(t *testing.T) {
 	defer ts.Close()
 
 	rel := &githubRelease{
-		TagName: "v0.2.0",
+		TagName: "macos-v0.2.0",
 		Assets: []struct {
 			Name               string `json:"name"`
 			BrowserDownloadURL string `json:"browser_download_url"`
@@ -270,7 +273,7 @@ func TestInstallUpdate(t *testing.T) {
 		},
 	}
 
-	if err := installUpdate(rel, "0.2.0", execPath); err != nil {
+	if err := installUpdate(rel, releaseVersion(rel.TagName), execPath); err != nil {
 		t.Fatalf("installUpdate failed: %v", err)
 	}
 
@@ -287,6 +290,138 @@ func TestInstallUpdate(t *testing.T) {
 	}
 	if info.Mode()&0o111 == 0 {
 		t.Fatalf("installed binary is not executable: mode %v", info.Mode())
+	}
+}
+
+func TestForkUpdateRepository(t *testing.T) {
+	t.Setenv("PX0_REPO", "")
+	if got := getRepoName(); got != "avaakash/px0" {
+		t.Fatalf("updater points at %q", got)
+	}
+	t.Setenv("PX0_REPO", "  example/other-fork  ")
+	if got := getRepoName(); got != "example/other-fork" {
+		t.Fatalf("repository override ignored: %q", got)
+	}
+}
+
+func TestForkReleaseValidation(t *testing.T) {
+	for _, tc := range []struct {
+		tag                      string
+		draft, prerelease, valid bool
+	}{
+		{"macos-v0.1.21", false, false, true},
+		{"v0.1.22", false, false, true},
+		{"0.1.22", false, false, true},
+		{"v0.1.22", true, false, false},
+		{"v0.1.22", false, true, false},
+		{"", false, false, false},
+		{"latest", false, false, false},
+		{"macos-v1.2.3/something", false, false, false},
+	} {
+		t.Run(fmt.Sprintf("%s-%t-%t", tc.tag, tc.draft, tc.prerelease), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(githubRelease{TagName: tc.tag, Draft: tc.draft, Prerelease: tc.prerelease})
+			}))
+			defer server.Close()
+			t.Setenv("PX0_UPDATE_URL", server.URL)
+			rel, err := fetchLatestRelease("avaakash/px0")
+			if (err == nil) != tc.valid {
+				t.Fatalf("tag %q accepted=%t, want %t (%v)", tc.tag, err == nil, tc.valid, err)
+			}
+			if tc.valid && !stableVersion.MatchString(releaseVersion(rel.TagName)) {
+				t.Fatal("release version not normalized")
+			}
+		})
+	}
+}
+
+func TestForkIgnoresOldRepositoryCache(t *testing.T) {
+	for _, oldRepo := range []string{"", "px0-ai/px0", "another/fork"} {
+		t.Run("repo-"+oldRepo, func(t *testing.T) {
+			t.Setenv("PX0_REPO", "")
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			// Write a real old cache file without the write helper's migration.
+			b, _ := json.Marshal(updateState{Repo: oldRepo, LastChecked: time.Now(), LatestVer: "0.1.20"})
+			os.MkdirAll(filepath.Dir(stateFilePath()), 0700)
+			if err := os.WriteFile(stateFilePath(), b, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if state, err := readUpdateState(); err != nil || state != nil {
+				t.Fatalf("old repository cache reused: %+v %v", state, err)
+			}
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				json.NewEncoder(w).Encode(githubRelease{TagName: "macos-v0.1.21"})
+			}))
+			defer server.Close()
+			t.Setenv("PX0_UPDATE_URL", server.URL)
+			AutoUpdate("0.1.22") // newer local build must never be replaced
+			state, err := readUpdateState()
+			if err != nil || state == nil || state.Repo != "avaakash/px0" || state.LatestVer != "0.1.21" || calls != 1 {
+				t.Fatalf("fork cache not refreshed: %+v %v calls=%d", state, err, calls)
+			}
+			AutoUpdate("0.1.22")
+			if calls != 1 {
+				t.Fatal("daily check cache missed")
+			}
+		})
+	}
+}
+
+func TestInstallUpdateFailureKeepsCurrentBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix verification fixture")
+	}
+	for _, scenario := range []string{"wrong-version", "bad-checksum", "missing-checksum", "missing-platform"} {
+		t.Run(scenario, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "px0")
+			old := []byte("original local build")
+			if err := os.WriteFile(path, old, 0755); err != nil {
+				t.Fatal(err)
+			}
+			name := fmt.Sprintf("px0-0.1.23-%s-%s", runtime.GOOS, runtime.GOARCH)
+			binary := []byte("#!/bin/sh\necho 'px0 0.1.23'\n")
+			if scenario == "wrong-version" {
+				binary = []byte("#!/bin/sh\necho 'px0 0.1.21'\n")
+			}
+			digest := fmt.Sprintf("%x", sha256.Sum256(binary))
+			if scenario == "bad-checksum" {
+				digest = strings.Repeat("0", 64)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/checksums.txt" {
+					fmt.Fprintf(w, "%s  %s\n", digest, name)
+				} else {
+					w.Write(binary)
+				}
+			}))
+			defer server.Close()
+			var rel githubRelease
+			// Decode the real manifest shape, including our macOS tag prefix.
+			manifest := fmt.Sprintf(`{"tag_name":"macos-v0.1.23","assets":[{"name":%q,"browser_download_url":%q},{"name":"checksums.txt","browser_download_url":%q}]}`, name, server.URL+"/binary", server.URL+"/checksums.txt")
+			if err := json.Unmarshal([]byte(manifest), &rel); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "missing-checksum" {
+				rel.Assets = rel.Assets[:1]
+			}
+			if scenario == "missing-platform" {
+				rel.Assets = rel.Assets[1:]
+			}
+			if err := installUpdate(&rel, releaseVersion(rel.TagName), path); err == nil {
+				t.Fatal("invalid release installed")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(got, old) {
+				t.Fatalf("current binary changed: %q %v", got, err)
+			}
+			left, _ := filepath.Glob(filepath.Join(dir, "px0-update-*"))
+			if len(left) != 0 {
+				t.Fatalf("temporary downloads leaked: %v", left)
+			}
+		})
 	}
 }
 
@@ -452,4 +587,3 @@ func BenchmarkCompareSemver(b *testing.B) {
 		_ = compareSemver(p[0], p[1])
 	}
 }
-

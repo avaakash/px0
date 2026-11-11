@@ -88,6 +88,7 @@ type Server struct {
 	worktreeArgs      []string
 	worktreeClosed    bool
 	worktreeInventory worktreeInventoryCache
+	worktreePR        worktreePRService
 	worktreeWriteMu   sync.Mutex
 	terminals         terminalManager
 
@@ -177,6 +178,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(s.routePath("/api/git/worktrees/diff"), s.handleWorktreeDiff)
 	s.mux.HandleFunc(s.routePath("/api/git/worktrees/stage"), s.handleWorktreeStage)
 	s.mux.HandleFunc(s.routePath("/api/git/worktrees/unstage"), s.handleWorktreeStage)
+	s.mux.HandleFunc(s.routePath("/api/git/worktrees/pr"), s.handleWorktreePR)
+	s.mux.HandleFunc(s.routePath("/api/git/worktrees/pr/rerun"), s.handleWorktreePRRerun)
 	for _, action := range []string{"open", "list", "stream", "input", "resize", "close", "rename"} {
 		s.mux.HandleFunc(s.routePath("/api/terminal/"+action), s.handleTerminal)
 	}

@@ -256,5 +256,7 @@ func (s *Server) handleWorktreeDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	diff := string(b)
-	writeJSON(w, map[string]any{"worktree": root, "path": selected.Path, "group": selected.Group, "status": selected.Status, "diff": diff, "hunks": render.HighlightDiff(selected.Path, diff)})
+	// Reuse the scoped status read so a working-tree diff can reveal that the
+	// file also became staged, without scanning the whole checkout each poll.
+	writeJSON(w, map[string]any{"worktree": root, "path": selected.Path, "group": selected.Group, "status": selected.Status, "files": files, "paths": paths, "diff": diff, "hunks": render.HighlightDiff(selected.Path, diff)})
 }

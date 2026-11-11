@@ -3,6 +3,7 @@ package update
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -21,15 +23,17 @@ import (
 )
 
 const (
-	defaultRepo       = "px0-ai/px0"
+	defaultRepo       = "avaakash/px0"
 	updateCheckPeriod = 24 * time.Hour
 )
 
 // githubRelease describes the GitHub Releases API payload for the latest release.
 type githubRelease struct {
-	TagName string `json:"tag_name"`
-	Name    string `json:"name"`
-	Assets  []struct {
+	TagName    string `json:"tag_name"`
+	Name       string `json:"name"`
+	Draft      bool   `json:"draft"`
+	Prerelease bool   `json:"prerelease"`
+	Assets     []struct {
 		Name               string `json:"name"`
 		BrowserDownloadURL string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -37,12 +41,13 @@ type githubRelease struct {
 
 // updateState stores the timestamp of the last daily update check and the latest version string seen.
 type updateState struct {
+	Repo        string    `json:"repo"`
 	LastChecked time.Time `json:"last_checked"`
 	LatestVer   string    `json:"latest_ver"`
 }
 
 func getRepoName() string {
-	if r := os.Getenv("PX0_REPO"); r != "" {
+	if r := strings.TrimSpace(os.Getenv("PX0_REPO")); r != "" {
 		return r
 	}
 	return defaultRepo
@@ -70,6 +75,11 @@ func readUpdateState() (*updateState, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
+	// Old upstream state has no repository identity. Never let that cache
+	// suppress this fork's first check or carry an upstream version across.
+	if !strings.EqualFold(s.Repo, getRepoName()) {
+		return nil, nil
+	}
 	return &s, nil
 }
 
@@ -78,12 +88,24 @@ func writeUpdateState(s *updateState) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return
 	}
-	data, err := json.Marshal(s)
+	copy := *s
+	if copy.Repo == "" {
+		copy.Repo = getRepoName()
+	}
+	data, err := json.Marshal(&copy)
 	if err != nil {
 		return
 	}
 	_ = os.WriteFile(p, data, 0o644)
 }
+
+// Our existing macOS releases use macos-v tags but plain numeric asset names.
+// Continue accepting standard v tags and unprefixed versions too.
+func releaseVersion(tag string) string {
+	return strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(tag), "macos-"), "v")
+}
+
+var stableVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
 // compareSemver returns:
 //
@@ -91,8 +113,8 @@ func writeUpdateState(s *updateState) {
 //	-1 if v1 < v2
 //	 0 if v1 == v2
 func compareSemver(v1, v2 string) int {
-	v1 = strings.TrimPrefix(strings.TrimSpace(v1), "v")
-	v2 = strings.TrimPrefix(strings.TrimSpace(v2), "v")
+	v1 = releaseVersion(v1)
+	v2 = releaseVersion(v2)
 
 	parts1 := strings.Split(v1, ".")
 	parts2 := strings.Split(v2, ".")
@@ -159,6 +181,9 @@ func fetchLatestRelease(repo string) (*githubRelease, error) {
 	var rel githubRelease
 	if err := json.Unmarshal(body, &rel); err != nil {
 		return nil, err
+	}
+	if rel.Draft || rel.Prerelease || !stableVersion.MatchString(releaseVersion(rel.TagName)) {
+		return nil, fmt.Errorf("release %q is not a supported stable version", rel.TagName)
 	}
 	return &rel, nil
 }
@@ -255,7 +280,7 @@ func AutoUpdate(currentVersion string) {
 		if err != nil {
 			return
 		}
-		latestVer = strings.TrimPrefix(rel.TagName, "v")
+		latestVer = releaseVersion(rel.TagName)
 		writeUpdateState(&updateState{LastChecked: now, LatestVer: latestVer})
 	}
 
@@ -274,7 +299,7 @@ func AutoUpdate(currentVersion string) {
 		if err != nil {
 			return
 		}
-		latestVer = strings.TrimPrefix(rel.TagName, "v")
+		latestVer = releaseVersion(rel.TagName)
 		if compareSemver(latestVer, currentVersion) <= 0 {
 			if ui.Verbose {
 				ui.Status("ok", fmt.Sprintf("px0 is up to date (v%s)", currentVersion), "", 0, os.Stdout)
@@ -314,7 +339,7 @@ func RunSelfUpdate(currentVer string) error {
 		return fmt.Errorf("failed to fetch latest release: %w", err)
 	}
 
-	latestVer := strings.TrimPrefix(rel.TagName, "v")
+	latestVer := releaseVersion(rel.TagName)
 	if compareSemver(latestVer, currentVer) <= 0 {
 		ui.Status("ok", fmt.Sprintf("px0 is already up to date (v%s)", currentVer), "", 0, os.Stdout)
 		return nil
@@ -348,7 +373,6 @@ func RunSelfUpdate(currentVer string) error {
 // installUpdate downloads, verifies, and atomically installs the release
 // binary matching the current OS/arch in place of execPath.
 func installUpdate(rel *githubRelease, latestVer, execPath string) error {
-	repo := getRepoName()
 	ext := ""
 	if runtime.GOOS == "windows" {
 		ext = ".exe"
@@ -365,8 +389,7 @@ func installUpdate(rel *githubRelease, latestVer, execPath string) error {
 		}
 	}
 	if downloadURL == "" {
-		// Fallback to standard github release download link pattern
-		downloadURL = fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, rel.TagName, expectedAsset)
+		return fmt.Errorf("release %s does not include %s; keeping the current binary", rel.TagName, expectedAsset)
 	}
 	if checksumURL == "" {
 		return fmt.Errorf("release %s does not include checksums.txt", rel.TagName)
@@ -405,10 +428,17 @@ func installUpdate(rel *githubRelease, latestVer, execPath string) error {
 	}
 
 	// Verify the downloaded binary works
-	cmd := exec.Command(tmpPath, "-version")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, tmpPath, "-version")
+	cmd.WaitDelay = 250 * time.Millisecond
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("verification of new binary failed: %w (output: %s)", err, strings.TrimSpace(string(out)))
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 || fields[0] != "px0" || fields[1] != latestVer {
+		return fmt.Errorf("downloaded binary does not report expected version %s", latestVer)
 	}
 
 	// Atomically replace existing binary

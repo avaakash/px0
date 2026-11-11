@@ -4,10 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+      - 'macos-v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to release (e.g. v0.2.0)'
+        description: 'Existing version tag to release (e.g. macos-v0.1.22 or v0.2.0)'
         required: false
         default: ''
 
@@ -25,10 +26,41 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Determine Version
+        id: get_version
+        env:
+          INPUT_TAG: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          if [[ ! "$TAG" =~ ^(macos-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a stable tag: macos-vX.Y.Z or vX.Y.Z" >&2
+            exit 1
+          fi
+          # Always build the tagged source, including manual dispatches.
+          git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+          git checkout --detach "$TAG"
+          VER="${TAG#macos-}"
+          VER="${VER#v}"
+          if [ "$(tr -d '[:space:]' < VERSION)" != "$VER" ]; then
+            echo "VERSION must match $TAG" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VER" >> $GITHUB_OUTPUT
+          if [[ "$TAG" == macos-v* ]]; then
+            echo 'targets=darwin/amd64 darwin/arm64' >> $GITHUB_OUTPUT
+          else
+            echo 'targets=linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 windows/386 freebsd/amd64 freebsd/arm64 openbsd/amd64 openbsd/arm64 netbsd/amd64' >> $GITHUB_OUTPUT
+          fi
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Setup Node.js
@@ -40,23 +72,10 @@ jobs:
         run: |
           node ./scripts/build-web.js
 
-      - name: Determine Version
-        id: get_version
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            TAG="${{ github.event.inputs.version }}"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          VER="${TAG#v}"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "version=$VER" >> $GITHUB_OUTPUT
-          # Ensure VERSION file matches the release version
-          echo "$VER" > VERSION
-
       - name: Build Cross-Platform Binaries
         env:
           VERSION: ${{ steps.get_version.outputs.version }}
+          TARGETS: ${{ steps.get_version.outputs.targets }}
           POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
         run: |
           mkdir -p dist
@@ -64,12 +83,6 @@ jobs:
           if [ -n "$POSTHOG_KEY" ]; then
             LDFLAGS="$LDFLAGS -X main.posthogKey=$POSTHOG_KEY"
           fi
-          TARGETS="
-          linux/amd64 linux/arm64 linux/arm linux/386 linux/riscv64
-          darwin/amd64 darwin/arm64
-          windows/amd64 windows/arm64 windows/386
-          freebsd/amd64 freebsd/arm64 openbsd/amd64 openbsd/arm64 netbsd/amd64
-          "
           for t in $TARGETS; do
             os=${t%/*}
             arch=${t#*/}

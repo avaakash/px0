@@ -3,6 +3,7 @@ import { on, emit } from './bus.js';
 import { createWorktreeChangesController } from './worktreechanges-state.js';
 import { worktreeDiffHTML } from './worktreechanges-render.js';
 import { showToast } from './ui.js';
+import { initWorktreePRs, syncWorktreePRs, refreshWorktreePRs } from './worktree-pr.js';
 
 const WORKTREE_PREFS_KEY = 'px0.worktreeView.v2';
 const WORKTREE_INVENTORY_KEY = 'px0.worktreeInventory.v2';
@@ -10,7 +11,19 @@ let worktreeReviewVisible = false, worktreeChoiceRevision = 0, worktreeRequested
 let worktreeChoices = [], worktreeRepositories = [], worktreeRenderedList = '', worktreeRenderedDiff = '', worktreeLayout = 'split';
 let worktreeLineLimit = 2000, worktreeShownSelection = '', worktreeRestoringScroll = false, worktreeScrollRevision = 0;
 const worktreeFileLimits = new Map();
-let worktreeShowHidden = false;
+let worktreeShowHidden = false, pendingWorktreeSession = null, worktreeRefreshPromise = Promise.resolve();
+export function waitForWorktreeSession() { return worktreeRefreshPromise; }
+export function worktreeSession() {
+  reviewScroll();
+  return { ...worktreeReview.session(), layout: worktreeLayout, filter: $('#wt-filter').value, listScroll: $('#wt-files').scrollTop, showHidden: worktreeShowHidden };
+}
+export function prepareWorktreeSession(saved) {
+  if (!saved || typeof saved !== 'object') return;
+  pendingWorktreeSession = saved;
+  worktreeLayout = saved.layout === 'unified' ? 'unified' : 'split'; $('#wt-layout').value = worktreeLayout;
+  $('#wt-filter').value = typeof saved.filter === 'string' ? saved.filter.slice(0, 2000) : '';
+  worktreeShowHidden = saved.showHidden === true;
+}
 function worktreeStored(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) || fallback; } catch { return fallback; }
 }
@@ -23,6 +36,7 @@ const reviewScroll = () => {
 const worktreeReview = createWorktreeChangesController({
   hidden: Array.isArray(worktreePreferences.hidden) ? worktreePreferences.hidden.filter(p => typeof p === 'string').slice(0, 500) : [],
   expanded: Array.isArray(worktreePreferences.expanded) ? worktreePreferences.expanded.filter(p => typeof p === 'string').slice(0, 100) : [],
+  collapsedGroups: worktreePreferences.collapsedGroups,
   names: worktreePreferences.names,
   onPreferences: value => saveWorktreeValue(WORKTREE_PREFS_KEY, value),
   loadChanges: (worktree, signal) => api('/api/git/worktrees/changes', { worktree }, { signal }),
@@ -64,6 +78,12 @@ async function refreshWorktreeChoices(force = false) {
     worktreeRepositories = result.repositories || [];
     saveWorktreeValue(WORKTREE_INVENTORY_KEY, { worktrees: worktreeChoices, repositories: worktreeRepositories });
     worktreeReview.setWorktrees(worktreeChoices);
+    const saved = pendingWorktreeSession; pendingWorktreeSession = null;
+    if (saved) {
+      await worktreeReview.restoreSession(saved);
+      if (revision !== worktreeChoiceRevision || !worktreeReviewVisible) return;
+      $('#wt-files').scrollTop = Number.isFinite(saved.listScroll) ? Math.max(0, saved.listScroll) : 0;
+    }
     if (!worktreeChoices.length) {
       setWorktreeMessage(result.reason || 'No registered worktrees.');
       $('#wt-diff').textContent = result.reason || 'Open a Git repository to review its worktrees.';
@@ -83,11 +103,14 @@ function worktreeFilesHTML(w, state) {
   if (!view?.loaded) return '<p class="wt-empty">' + esc(view?.error || (view?.loadingFiles ? 'Loading changes…' : 'Expand to load changes.')) + '</p>';
   const query = $('#wt-filter').value.toLowerCase();
   const files = view.files.filter(f => f.path.toLowerCase().includes(query));
-  let html = '', remaining = worktreeFileLimits.get(w.path) || 100;
+  let html = '', visibleCount = 0, remaining = worktreeFileLimits.get(w.path) || 100;
   for (const [group, label] of [['conflicts', 'Merge Changes'], ['staged', 'Staged Changes'], ['unstaged', 'Changes']]) {
     const entries = files.filter(f => f.group === group);
     if (!entries.length) continue;
-    html += '<h4 class="wt-group"><span>' + label + ' ' + entries.length + '</span><button type="button" class="wt-stage-all" data-wt-action-group="' + group + '" data-wt-root="' + esc(w.path) + '"' + (view.mutating || query ? ' disabled' : '') + ' title="' + (query ? 'Clear the file filter to use group actions' : 'Apply to all files in this change group') + '" aria-label="' + esc((group === 'staged' ? 'Unstage all' : 'Stage all') + ' · ' + label + ' · ' + worktreeLabel(w)) + '">' + (group === 'staged' ? 'Unstage all' : 'Stage all') + '</button></h4>';
+    const open = !state.collapsedGroups.has(w.path + '\0' + group);
+    html += '<h4 class="wt-group"><button type="button" class="wt-group-toggle" data-wt-toggle-group="' + group + '" data-wt-root="' + esc(w.path) + '" aria-expanded="' + open + '" aria-label="' + esc(label + ' · ' + worktreeLabel(w)) + '"><span class="wt-chevron">' + (open ? '▾' : '▸') + '</span><span>' + label + ' ' + entries.length + '</span></button><button type="button" class="wt-stage-all" data-wt-action-group="' + group + '" data-wt-root="' + esc(w.path) + '"' + (view.mutating || query ? ' disabled' : '') + ' title="' + (query ? 'Clear the file filter to use group actions' : 'Apply to all files in this change group') + '" aria-label="' + esc((group === 'staged' ? 'Unstage all' : 'Stage all') + ' · ' + label + ' · ' + worktreeLabel(w)) + '">' + (group === 'staged' ? 'Unstage all' : 'Stage all') + '</button></h4>';
+    if (!open) continue;
+    visibleCount += entries.length;
     for (const file of entries.slice(0, Math.max(0, remaining))) {
       const key = worktreeReview.key(file), cut = file.path.lastIndexOf('/');
       const selected = state.worktree === w.path && key === state.selected;
@@ -95,7 +118,7 @@ function worktreeFilesHTML(w, state) {
     }
     remaining -= entries.length;
   }
-  if (files.length > (worktreeFileLimits.get(w.path) || 100)) html += '<button type="button" class="wt-more" data-wt-more="' + esc(w.path) + '">Show 100 more files</button>';
+  if (visibleCount > (worktreeFileLimits.get(w.path) || 100)) html += '<button type="button" class="wt-more" data-wt-more="' + esc(w.path) + '">Show 100 more files</button>';
   return html || '<p class="wt-empty">' + (view.error ? esc(view.error) : query ? 'No matching files.' : 'No uncommitted changes.') + '</p>';
 }
 
@@ -114,7 +137,7 @@ function renderWorktreeChanges(state) {
         html += '<h3 class="wt-repository" title="' + esc(repository || '') + '">' + esc(repo?.name || 'Repository') + '</h3>';
       }
       const open = state.expanded.has(w.path), view = state.views.get(w.path), label = worktreeLabel(w);
-      html += '<section class="wt-card"><header class="wt-card-head"><button type="button" class="wt-card-toggle" data-wt-toggle="' + esc(w.path) + '" aria-expanded="' + open + '"' + (!w.available ? ' disabled' : '') + ' title="' + esc((w.branch ? w.branch + '\n' : '') + w.path) + '"><span class="wt-chevron">' + (open ? '▾' : '▸') + '</span><span class="wt-branch">' + esc(label) + '</span><span class="wt-card-count">' + (view?.loadingFiles ? '…' : view?.loaded ? view.files.length : !w.available ? 'unavailable' : '') + '</span></button><button type="button" class="wt-terminal" data-wt-terminal="' + esc(w.path) + '" aria-label="' + esc('Open terminal in ' + label) + '" title="Open terminal">›_</button><button type="button" class="wt-rename" data-wt-rename="' + esc(w.path) + '" aria-label="' + esc('Rename ' + label) + '" title="Rename display name">✎</button><button type="button" class="wt-hide" data-wt-hide="' + esc(w.path) + '" aria-label="' + esc('Hide ' + label + ' from view') + '" title="Hide from view (keeps files and branch)">×</button></header>' + (open ? '<div class="wt-card-files">' + worktreeFilesHTML(w, state) + '</div>' : '') + '</section>';
+      html += '<section class="wt-card"><header class="wt-card-head"><button type="button" class="wt-card-toggle" data-wt-toggle="' + esc(w.path) + '" aria-expanded="' + open + '"' + (!w.available ? ' disabled' : '') + ' title="' + esc((w.branch ? w.branch + '\n' : '') + w.path) + '"><span class="wt-chevron">' + (open ? '▾' : '▸') + '</span><span class="wt-branch">' + esc(label) + '</span><span class="wt-card-count">' + (view?.loadingFiles ? '…' : view?.loaded ? view.files.length : !w.available ? 'unavailable' : '') + '</span></button><button type="button" class="wt-terminal" data-wt-terminal="' + esc(w.path) + '" aria-label="' + esc('Open terminal in ' + label) + '" title="Open terminal">›_</button><button type="button" class="wt-rename" data-wt-rename="' + esc(w.path) + '" aria-label="' + esc('Rename ' + label) + '" title="Rename display name">✎</button><button type="button" class="wt-hide" data-wt-hide="' + esc(w.path) + '" aria-label="' + esc('Hide ' + label + ' from view') + '" title="Hide from view (keeps files and branch)">×</button></header><div data-wt-pr-slot="' + esc(w.path) + '"></div>' + (open ? '<div class="wt-card-files">' + worktreeFilesHTML(w, state) + '</div>' : '') + '</section>';
     }
     const hidden = state.inventory.filter(w => state.hidden.has(w.path));
     $('#wt-files').innerHTML = html || '<p class="wt-empty">' + (hidden.length ? 'All worktrees are hidden. Restore them below.' : 'Loading worktrees…') + '</p>';
@@ -125,6 +148,7 @@ function renderWorktreeChanges(state) {
     $('#wt-hidden-list').innerHTML = hidden.map(w => '<button type="button" class="wt-restore" data-wt-restore="' + esc(w.path) + '">Restore ' + esc(worktreeLabel(w)) + '</button>').join('') + (hidden.length ? '<button type="button" class="wt-restore" data-wt-restore-all>Restore all</button>' : '');
   }
   setWorktreeMessage();
+  syncWorktreePRs(state, worktreeReviewVisible);
   const selectedWorktree = state.inventory.find(w => w.path === state.worktree);
   const contextWorktree = selectedWorktree || state.inventory.find(w => w.available && !state.hidden.has(w.path) && state.expanded.has(w.path)) || state.inventory.find(w => w.available && !state.hidden.has(w.path));
   if (contextWorktree) emit('worktree:context', { root: contextWorktree.path, label: worktreeLabel(contextWorktree) });
@@ -152,6 +176,8 @@ function renderWorktreeChanges(state) {
 }
 
 export function initWorktreeChanges() {
+  initWorktreePRs();
+  on('worktrees:refresh', () => { if (worktreeReviewVisible) refreshWorktreeChoices(true); });
   on('mode:changed', mode => {
     worktreeReviewVisible = mode === 'worktrees';
     if (worktreeReviewVisible) {
@@ -163,16 +189,22 @@ export function initWorktreeChanges() {
           worktreeReview.setWorktrees(worktreeChoices);
         }
       } else renderWorktreeChanges(worktreeReview.state());
-      refreshWorktreeChoices();
-    } else { worktreeChoiceRevision++; worktreeReview.pause(); }
+      worktreeRefreshPromise = refreshWorktreeChoices();
+    } else { worktreeChoiceRevision++; worktreeReview.pause(); syncWorktreePRs(worktreeReview.state(), false); }
   });
-  $('#wt-refresh').addEventListener('click', () => { reviewScroll(); refreshWorktreeChoices(true); });
+  $('#wt-refresh').addEventListener('click', () => { reviewScroll(); refreshWorktreeChoices(true); refreshWorktreePRs(); });
   $('#wt-filter').addEventListener('input', () => { worktreeRenderedList = ''; renderWorktreeChanges(worktreeReview.state()); });
   $('#wt-files').addEventListener('click', e => {
     const terminal = e.target.closest('[data-wt-terminal]'), actionFile = e.target.closest('[data-wt-action-file]'), actionGroup = e.target.closest('[data-wt-action-group]');
+    const groupToggle = e.target.closest('[data-wt-toggle-group]');
     const rename = e.target.closest('[data-wt-rename]'), hide = e.target.closest('[data-wt-hide]'), toggle = e.target.closest('[data-wt-toggle]'), file = e.target.closest('[data-wt-file]'), more = e.target.closest('[data-wt-more]');
-    reviewScroll();
+    reviewScroll(); pendingWorktreeSession = null;
     if (terminal) { const w = worktreeChoices.find(w => w.path === terminal.dataset.wtTerminal); if (w) emit('terminal:open', { root: w.path, label: worktreeLabel(w) }); }
+    else if (groupToggle) {
+      const path = groupToggle.dataset.wtRoot, group = groupToggle.dataset.wtToggleGroup;
+      worktreeReview.toggleGroup(path, group);
+      [...$('#wt-files').querySelectorAll('[data-wt-toggle-group]')].find(button => button.dataset.wtRoot === path && button.dataset.wtToggleGroup === group)?.focus({ preventScroll: true });
+    }
     else if (actionFile || actionGroup) {
       const action = actionFile || actionGroup, path = action.dataset.wtRoot;
       const item = actionFile ? worktreeReview.state().views.get(path)?.files.find(f => worktreeReview.key(f) === action.dataset.wtActionFile) : null;
@@ -197,5 +229,10 @@ export function initWorktreeChanges() {
   $('#wt-diff').addEventListener('click', e => { if (e.target.closest('[data-wt-lines]')) { worktreeLineLimit += 2000; renderWorktreeChanges(worktreeReview.state()); } });
   $('#wt-layout').addEventListener('change', e => { reviewScroll(); worktreeLayout = e.target.value; renderWorktreeChanges(worktreeReview.state()); });
   setInterval(() => { if (worktreeReviewVisible && document.visibilityState === 'visible') { reviewScroll(); worktreeReview.refreshDiff(); } }, 2000);
-  setInterval(() => { if (worktreeReviewVisible && document.visibilityState === 'visible') worktreeReview.refreshExpanded(); }, 10000);
+  const refreshVisibleWorktreeChanges = () => {
+    if (worktreeReviewVisible && document.visibilityState === 'visible') { reviewScroll(); worktreeReview.refreshExpanded(true); }
+  };
+  setInterval(refreshVisibleWorktreeChanges, 10000);
+  addEventListener('focus', refreshVisibleWorktreeChanges);
+  document.addEventListener('visibilitychange', refreshVisibleWorktreeChanges);
 }
